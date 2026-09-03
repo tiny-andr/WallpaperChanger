@@ -70,7 +70,7 @@ namespace WallpaperChanger
 
             Emit("■ 快捷键", headFont, headColor, 0);
             Emit("  • 默认：Ctrl+9 = 下一张，Ctrl+8 = 上一张（可在设置中修改绑定）。", bodyFont, bodyColor, 0);
-            Emit("  • 主键盘与小键盘数字键都支持，在全屏游戏中也生效。", bodyFont, bodyColor, 0);
+            Emit("  • 主键盘与小键盘数字键都支持。", bodyFont, bodyColor, 0);
             Emit("  • \"上一张\"可连续回退，最远回到本次启动时显示的那张壁纸。", bodyFont, bodyColor, 0);
             Emit("", bodyFont, bodyColor, 0);
 

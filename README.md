@@ -2,7 +2,7 @@
 
 > 🌐 **简体中文** | 中文用户请阅读：[**中文版 README**](README.zh-CN.md) (Chinese version)
 
-A lightweight Windows desktop wallpaper rotation tool that lives in the system tray. Pick one or more folders as your wallpaper source, choose a fit style and an interval, and let it cycle — or flip wallpapers on demand with global hotkeys that even work in fullscreen games.
+A lightweight Windows desktop wallpaper rotation tool that lives in the system tray. Pick one or more folders as your wallpaper source, choose a fit style and an interval, and let it cycle — or flip wallpapers on demand with global hotkeys.
 
 Built with C# / .NET 8 (WinForms), no runtime dependencies. Designed for Windows 8 and later.
 
@@ -13,7 +13,7 @@ Built with C# / .NET 8 (WinForms), no runtime dependencies. Designed for Windows
 - **8 switch intervals** — 1 / 5 / 10 / 30 minutes, 1 / 6 / 12 / 24 hours
 - **Random or sequential order**
 - **Multi-monitor** — the same wallpaper is applied to all screens
-- **Global hotkeys** (main keyboard **and** numpad, works in fullscreen games):
+- **Global hotkeys** (main keyboard **and** numpad):
   - `Ctrl+9` — next wallpaper
   - `Ctrl+8` — previous wallpaper (steps back through the history of this session)
 - **Tray resident** — right-click the tray icon for pause / next / previous / exit; closing the window just minimizes to tray

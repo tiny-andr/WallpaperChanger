@@ -12,8 +12,9 @@ namespace WallpaperChanger
         Prev    // go back to the previous wallpaper
     }
 
-    // System-wide hotkeys (RegisterHotKey) - they work regardless of focus,
-    // including while running in the tray or inside fullscreen games.
+    // System-wide hotkeys (RegisterHotKey) - they work regardless of window
+    // focus (e.g. while minimized to the tray), but exclusive-fullscreen
+    // games such as League of Legends may still intercept the keys.
     // Supports TWO independent Ctrl+digit bindings (next and previous),
     // each registered on BOTH the main keyboard and the numpad so either
     // keypad works.
