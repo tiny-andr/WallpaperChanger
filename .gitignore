@@ -1,0 +1,17 @@
+# build outputs
+bin/
+obj/
+dist_standalone/
+
+# installer artifacts (keep the .iss script, drop generated binaries)
+installer/*.exe
+installer/*.exe.manifest
+
+# runtime artifacts
+*.log
+WallpaperChanger.ini
+
+# IDE
+.vs/
+.idea/
+*.user
