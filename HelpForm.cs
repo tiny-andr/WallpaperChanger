@@ -32,6 +32,16 @@ namespace WallpaperChanger
             rtb.BackColor = Color.White;
             rtb.ScrollBars = RichTextBoxScrollBars.Vertical;
             rtb.DetectUrls = false;
+            // Make selection highlight vanish the moment the user clicks anywhere
+            // else (defensive — also useful when the dialog first opens with a
+            // lingering selection from the BuildContent pass).
+            rtb.HideSelection = true;
+            // The AcceptButton below steals focus from rtb on Enter, but the
+            // dialog itself still lands focus on rtb on first show — and a
+            // focused RichTextBox with a non-empty selection paints a blue
+            // band over the start of the text. Drop focus explicitly so it
+            // cannot accidentally remain "selected" when the user reads it.
+            rtb.TabStop = false;
             Controls.Add(rtb);
 
             Button btnClose = new Button();
@@ -42,6 +52,17 @@ namespace WallpaperChanger
             AcceptButton = btnClose;
 
             BuildContent();
+
+            // After the dialog is fully shown, make sure no text is pre-selected
+            // and the caret is on the Close button — not on the RichTextBox,
+            // because a focused RichTextBox draws a blue selection band even
+            // when SelectionLength is 0 in some DPI/font combinations.
+            Shown += delegate
+            {
+                rtb.SelectionLength = 0;
+                rtb.SelectionStart = 0;
+                btnClose.Focus();
+            };
         }
 
         private void BuildContent()
@@ -85,6 +106,7 @@ namespace WallpaperChanger
             Emit("  • \"上一张\"属于历史回退、不触发扫描，只会回到本次启动后已经显示过的壁纸。", bodyFont, bodyColor, 0);
 
             rtb.SelectionStart = 0;
+            rtb.SelectionLength = 0;
         }
 
         private void Emit(string text, Font font, Color color, int indent)
