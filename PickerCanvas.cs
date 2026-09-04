@@ -4,50 +4,78 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+// WIC (Windows Imaging Component) managed wrappers, referenced only for the
+// WebP fallback decoder. Aliased so System.Windows.Media.Color cannot clash
+// with System.Drawing.Color elsewhere in this file.
+using WicBitmapDecoder = System.Windows.Media.Imaging.BitmapDecoder;
+using WicBitmapSource = System.Windows.Media.Imaging.BitmapSource;
+using WicFormatConvertedBitmap = System.Windows.Media.Imaging.FormatConvertedBitmap;
+using WicInt32Rect = System.Windows.Int32Rect;
+using WicPixelFormats = System.Windows.Media.PixelFormats;
 
 namespace WallpaperChanger
 {
-    // Single-canvas grid control for the manual wallpaper picker.
+    // Virtualized thumbnail grid for the manual wallpaper picker.
     //
-    // Why a single canvas instead of 200 WallpaperTile Controls inside a
-    // FlowLayoutPanel (the previous design)? Each scroll step used to
-    // relocate every child and trigger ~200 paints. Fast scrolls tore --
-    // partial paints stacked on top of each other in unpredictable ways,
-    // and even at rest the main thread was pinned to single-digit FPS
-    // by GDI+ per-tile DrawImage + DrawText calls.
+    // Design (industry standard: ListView virtual mode / Explorer large-icon
+    // view / Lightroom grid). It NEVER renders the whole library and NEVER
+    // bakes one giant bitmap, because both of those froze the UI:
     //
-    // This control owns one large Bitmap (every tile's thumbnail, label,
-    // border, checkbox glyph pre-baked). OnPaint is a single
-    // Graphics.DrawImage for the visible region. Tile toggles and
-    // asynchronous thumbnail decodes repaint one small rectangle inside
-    // the canvas and Invalidate(Rectangle) only that region on screen.
+    //   1. First attempt: ~200 WallpaperTile Controls inside a FlowLayoutPanel
+    //      -- every scroll relocated+painted all children (single-digit FPS,
+    //      tearing on fast drags).
+    //   2. Second attempt: one PickerCanvas that pre-baked every tile into a
+    //      single large Bitmap on Configure(). Any window-size change changed
+    //      the column layout, forcing a full synchronous re-bake on the UI
+    //      thread (~37 MB alloc + 200 Graphics passes), so opening the dialog
+    //      froze ~6 s and maximize dead-locked the form.
+    //
+    // What this control does instead:
+    //   - Data (paths + picked indices) and drawing are fully decoupled.
+    //   - AutoScroll only moves the scrollbar offset; there are no children.
+    //   - OnPaint draws ONLY the tiles inside the visible viewport (a screen
+    //     holds ~35 tiles, whatever the library size is). Each tile is a 1:1
+    //     blit from the thumbnail cache when ready, or a placeholder when the
+    //     decode is still running.
+    //   - Thumbnails decode in the background (SemaphoreSlim=4) keyed by the
+    //     file path, so scrolling, filtering and re-layout reuse them.
+    //   - Scrolling / resizing only Invalidate() and repaint the viewport.
+    //     Layout recomputation on resize is debounced so dragging the window
+    //     never triggers work in a tight loop.
     internal class PickerCanvas : ScrollableControl
     {
         private static readonly Color Accent = Color.FromArgb(24, 95, 165);
         private static readonly Color BorderIdle = Color.FromArgb(176, 176, 176);
         private static readonly Color PlaceholderBg = Color.FromArgb(240, 240, 240);
-        private const int TileRadius = 5;
+        private const int DesignCols = 7;
 
-        private readonly List<string> items = new List<string>();
+        private readonly List<string> paths = new List<string>();
         private readonly HashSet<int> picked = new HashSet<int>();
-        private Bitmap canvas;
-        private Bitmap[] thumbs;
-        private int cellW;
-        private int cellImgH;
-        private int cellLabelH;
-        private int cols;
-        private int margin;
+        private readonly Dictionary<string, Bitmap> thumbCache =
+            new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+        private readonly Queue<string> decodeQueue = new Queue<string>();
+        private readonly HashSet<string> decoding = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly SemaphoreSlim decodeGate = new SemaphoreSlim(4);
+        private readonly System.Windows.Forms.Timer relayoutTimer;
         private Font labelFont;
         private Font placeholderFont;
 
-        public event Action<int, bool> TileToggled;
-        public event Action<int> TileHover;
+        private int spacing = 8;          // gap between tiles (physical px)
+        private int cellW = 258;
+        private int cellImgH = 145;
+        private int cellLabelH = 22;
+        private int cols = DesignCols;
+        private int rows;
+        private bool dirtyThumbsForCell;  // cell size changed -> cache invalid
 
-        public int ItemCount { get { return items.Count; } }
-        public int PickedCount { get { return picked.Count; } }
-        public IEnumerable<string> AllItems { get { return items; } }
-        public string ItemAt(int idx) { return items[idx]; }
+        public event Action<int, bool> TileToggled;
+
+        public int ItemCount { get { return paths.Count; } }
+        public string ItemAt(int idx) { return paths[idx]; }
+        public bool IsPicked(int idx) { return picked.Contains(idx); }
 
         public PickerCanvas()
         {
@@ -60,253 +88,329 @@ namespace WallpaperChanger
             VScroll = true;
             BackColor = SystemColors.Control;
             TabStop = false;
+            labelFont = new Font("Microsoft YaHei UI", 9F);
+            placeholderFont = new Font(labelFont, FontStyle.Regular);
+            relayoutTimer = new System.Windows.Forms.Timer();
+            relayoutTimer.Interval = 200;
+            relayoutTimer.Tick += delegate { relayoutTimer.Stop(); Relayout(false); };
         }
 
-        // Replace the entire dataset and rebuild the canvas. prePicked holds
-        // indices into items that are checked on first paint.
-        public void Configure(IList<string> paths, IEnumerable<int> prePicked,
-            int cellW, int cellImgH, int cellLabelH, int cols, int margin, Font font)
+        // Replace the dataset (the display subset after filtering) and reset
+        // the layout. prePicked holds indices into paths that are checked.
+        // Thumbnail cache survives (keyed by file path), except when the cell
+        // geometry changed, in which case thumbnails are discarded and
+        // re-decoded at the new size.
+        public void SetWallpapers(List<string> displayPaths, IEnumerable<int> prePicked)
         {
-            DisposeCanvas();
-            items.Clear();
+            paths.Clear();
             picked.Clear();
-            if (paths != null) items.AddRange(paths);
+            if (displayPaths != null) paths.AddRange(displayPaths);
             if (prePicked != null) foreach (int i in prePicked) picked.Add(i);
 
-            this.cellW = Math.Max(80, cellW);
-            this.cellImgH = Math.Max(45, cellImgH);
-            this.cellLabelH = Math.Max(0, cellLabelH);
-            this.cols = Math.Max(1, cols);
-            this.margin = Math.Max(3, margin);
-            if (font != null)
-            {
-                if (labelFont != null) labelFont.Dispose();
-                labelFont = new Font(font, font.Style);
-            }
-            if (placeholderFont == null)
-                placeholderFont = new Font(labelFont ?? new Font("Microsoft YaHei UI", 9F), FontStyle.Regular);
-
-            if (items.Count == 0)
+            if (paths.Count == 0)
             {
                 AutoScrollMinSize = Size.Empty;
                 Invalidate();
                 return;
             }
-
-            thumbs = new Bitmap[items.Count];
-            BakeCanvas();
+            Relayout(true);
+            PrimeDecodeQueue();
         }
 
-        // Replace the picked set in one shot (used by bulk All/None/Invert).
-        // Only repaints tiles whose state actually flipped.
+        // Bulk replacement of the picked set (全选/全不选/反选 or toggle from
+        // the data layer). Redraws only the tiles whose state flipped.
         public void ApplyPicked(HashSet<int> newPicked)
         {
-            if (items.Count == 0) return;
-            if (newPicked == null) newPicked = new HashSet<int>();
-            HashSet<int> flipped = new HashSet<int>();
-            for (int i = 0; i < items.Count; i++)
+            if (paths.Count == 0) return;
+            List<int> flipped = new List<int>();
+            for (int i = 0; i < paths.Count; i++)
             {
-                bool want = newPicked.Contains(i);
+                bool want = newPicked != null && newPicked.Contains(i);
                 bool have = picked.Contains(i);
-                if (want != have) flipped.Add(i);
+                if (want != have)
+                {
+                    flipped.Add(i);
+                    if (want) picked.Add(i); else picked.Remove(i);
+                }
             }
-            picked.Clear();
-            foreach (int i in newPicked) picked.Add(i);
-            foreach (int i in flipped) PaintTile(i);
+            Invalidate(flipped);
+        }
+
+        // Push one freshly decoded thumbnail. Ownership transfers to the
+        // cache. The affected tile is repainted if it is on screen.
+        public void SetThumb(string path, Bitmap bmp)
+        {
+            if (bmp == null) return;
+            if (IsDisposed || Disposing)
+            {
+                bmp.Dispose();
+                return;
+            }
+            Bitmap old;
+            if (thumbCache.TryGetValue(path, out old))
+            {
+                if (ReferenceEquals(old, bmp)) { bmp.Dispose(); return; }
+                old.Dispose();
+            }
+            thumbCache[path] = bmp;
+            Invalidate(TileRectByPath(path));
+        }
+
+        protected override void OnScroll(ScrollEventArgs se)
+        {
+            base.OnScroll(se);
             Invalidate();
         }
 
-        // Caller hands ownership of bmp over; previous thumbnail at this slot
-        // is disposed. The tile is repainted into the canvas.
-        public void SetThumb(int idx, Bitmap bmp)
+        protected override void OnResize(EventArgs e)
         {
-            if (idx < 0 || idx >= items.Count || thumbs == null)
-            {
-                if (bmp != null) bmp.Dispose();
-                return;
-            }
-            Bitmap old = thumbs[idx];
-            thumbs[idx] = bmp;
-            if (old != null) old.Dispose();
-            PaintTile(idx);
-            Invalidate(TileBoundsOnScreen(idx));
+            base.OnResize(e);
+            if (paths.Count == 0 || Disposing) return;
+            // Debounce: dragging the window fires many resizes; only relayout
+            // once the user pauses.
+            relayoutTimer.Stop();
+            relayoutTimer.Start();
         }
 
-        // True if the tile at idx matches the value the form's data layer holds.
-        public bool IsPicked(int idx) { return picked.Contains(idx); }
-
-        // Visible part of the canvas, in screen coords. Used by callers that
-        // need to know where a tile currently is for tooltips etc.
-        public Rectangle TileBoundsOnScreen(int idx)
+        private void Relayout(bool forceResetScroll)
         {
-            RectangleF r = TileBoundsInCanvas(idx);
-            int sx = (int)r.X + AutoScrollPosition.X;
-            int sy = (int)r.Y + AutoScrollPosition.Y;
-            return new Rectangle(sx, sy, (int)r.Width, (int)r.Height);
+            relayoutTimer.Stop();
+            if (paths.Count == 0 || ClientSize.Width < 40) return;
+
+            int oldImgW = cellW;
+            ComputeMetrics();
+
+            if (cellW != oldImgW)
+            {
+                // Cell geometry changed (window width crossed a threshold):
+                // cached thumbnails were decoded for the old size.
+                dirtyThumbsForCell = true;
+            }
+            if (dirtyThumbsForCell && cellW != oldImgW)
+            {
+                foreach (Bitmap b in thumbCache.Values) b.Dispose();
+                thumbCache.Clear();
+                decoding.Clear();
+                dirtyThumbsForCell = false;
+                PrimeDecodeQueue();
+            }
+
+            rows = (paths.Count + cols - 1) / cols;
+            int contentW = spacing + cols * (cellW + spacing);
+            int rowH = cellImgH + cellLabelH;
+            int contentH = spacing + rows * (rowH + spacing);
+            AutoScrollMinSize = new Size(contentW, contentH);
+            if (forceResetScroll) AutoScrollPosition = new Point(0, 0);
+            Invalidate();
+        }
+
+        private void ComputeMetrics()
+        {
+            spacing = Math.Max(6, ClientSize.Width / 220);
+            int avail = ClientSize.Width - spacing * 2
+                - SystemInformation.VerticalScrollBarWidth;
+            if (avail < 200) avail = 200;
+            cellW = (avail - (DesignCols - 1) * spacing) / DesignCols;
+            if (cellW < 120) cellW = 120;
+            if (cellW > 330) cellW = 330;
+            int availCols = Math.Max(1, (avail + spacing) / (cellW + spacing));
+            // The bigger the window, the more columns fit; the grid simply
+            // recomputes the row/col mapping on relayout.
+            int calcCols = Math.Max(1, avail / Math.Max(1, cellW + spacing));
+            cols = Math.Max(1, calcCols);
+            cellImgH = (int)(cellW * 9f / 16f);
+            cellLabelH = Math.Max(20,
+                TextRenderer.MeasureText("Ag", labelFont).Height + 6);
+            // Discard layout vars that are not needed.
+            GC.KeepAlive(availCols);
+        }
+
+        private void PrimeDecodeQueue()
+        {
+            if (paths.Count == 0) return;
+            decodeQueue.Clear();
+            // Visible rows first so the first screen fills fast.
+            int firstVisible = VisibleRowStart();
+            List<string> ordered = new List<string>();
+            int total = paths.Count;
+            int from = Math.Max(0, firstVisible - 1);
+            for (int step = 0; step < total; step++)
+            {
+                int idx = (from + step) % total;
+                ordered.Add(paths[idx]);
+            }
+            foreach (string p in ordered)
+            {
+                if (!thumbCache.ContainsKey(p) && !decoding.Contains(p))
+                    decodeQueue.Enqueue(p);
+            }
+            PumpDecoder();
+        }
+
+        private void PumpDecoder()
+        {
+            int startCount = decoding.Count;
+            while (decoding.Count < 4 && decodeQueue.Count > 0)
+            {
+                string path = decodeQueue.Dequeue();
+                decoding.Add(path);
+                int w = cellW;
+                int h = cellImgH;
+                Task.Run(delegate
+                {
+                    Bitmap bmp = MakeThumb(path, w, h);
+                    decoding.Remove(path);
+                    if (bmp != null)
+                    {
+                        SafeUi(delegate { SetThumb(path, bmp); });
+                    }
+                    else
+                    {
+                        // Decode failed: remember a null so we do not queue
+                        // this path forever.
+                        SafeUi(delegate
+                        {
+                            thumbCache[path] = null;
+                        });
+                    }
+                    // Continue draining the queue from a thread-pool thread.
+                    SafeUi(PumpDecoder);
+                });
+            }
+            if (startCount == 0 && decodeQueue.Count == 0)
+            {
+                // all queued items are decoding or cached; nothing to do
+            }
+        }
+
+        private int VisibleRowStart()
+        {
+            if (cols <= 0) return 0;
+            int oy = -AutoScrollPosition.Y;
+            int rowH = cellImgH + cellLabelH + spacing;
+            int r = oy / Math.Max(1, rowH);
+            return Math.Max(0, r * cols);
+        }
+
+        private void Invalidate(List<int> tileIndices)
+        {
+            foreach (int i in tileIndices)
+            {
+                Rectangle r = TileRectOnScreen(i);
+                if (r.IntersectsWith(ClientRectangle)) Invalidate(r);
+            }
+        }
+
+        private Rectangle TileRectByPath(string path)
+        {
+            int idx = paths.IndexOf(path);
+            if (idx < 0) return Rectangle.Empty;
+            return TileRectOnScreen(idx);
+        }
+
+        private Rectangle TileRectOnScreen(int idx)
+        {
+            if (cols <= 0) return Rectangle.Empty;
+            int col = idx % cols;
+            int row = idx / cols;
+            int rowH = cellImgH + cellLabelH;
+            int x = spacing + col * (cellW + spacing) + AutoScrollPosition.X;
+            int y = spacing + row * (rowH + spacing) + AutoScrollPosition.Y;
+            return new Rectangle(x, y, cellW, rowH);
         }
 
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            if (canvas == null)
-            {
-                e.Graphics.Clear(BackColor);
-                return;
-            }
-            Rectangle clip = e.ClipRectangle;
-            int dx = AutoScrollPosition.X;
-            int dy = AutoScrollPosition.Y;
-            int srcX = clip.Left - dx;
-            int srcY = clip.Top - dy;
-            if (srcX < 0) { clip.Width += srcX; srcX = 0; }
-            if (srcY < 0) { clip.Height += srcY; srcY = 0; }
-            if (clip.Width <= 0 || clip.Height <= 0) return;
-            int srcW = Math.Min(clip.Width, canvas.Width - srcX);
-            int srcH = Math.Min(clip.Height, canvas.Height - srcY);
-            if (srcW <= 0 || srcH <= 0) return;
-            Rectangle src = new Rectangle(srcX, srcY, srcW, srcH);
-            Rectangle dst = new Rectangle(srcX + dx, srcY + dy, srcW, srcH);
-            e.Graphics.DrawImage(canvas, dst, src, GraphicsUnit.Pixel);
-        }
-
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            base.OnMouseDown(e);
-            if (e.Button != MouseButtons.Left) return;
-            int idx = HitTest(e.Location);
-            if (idx < 0) return;
-            bool nowPicked;
-            if (picked.Contains(idx)) { picked.Remove(idx); nowPicked = false; }
-            else { picked.Add(idx); nowPicked = true; }
-            PaintTile(idx);
-            Invalidate(TileBoundsOnScreen(idx));
-            Action<int, bool> h = TileToggled;
-            if (h != null) h(idx, nowPicked);
-        }
-
-        protected override void OnMouseMove(MouseEventArgs e)
-        {
-            base.OnMouseMove(e);
-            int idx = HitTest(e.Location);
-            Action<int> h = TileHover;
-            if (h != null) h(idx);
-        }
-
-        // Convert screen point to tile index, or -1 if outside any tile.
-        private int HitTest(Point pt)
-        {
-            if (items.Count == 0 || cols <= 0) return -1;
-            int x = pt.X - AutoScrollPosition.X;
-            int y = pt.Y - AutoScrollPosition.Y;
-            int rowH = cellImgH + cellLabelH;
-            int stepX = cellW + margin;
-            int stepY = rowH + margin;
-            int col = (x - margin) / stepX;
-            int row = (y - margin) / stepY;
-            if (col < 0 || col >= cols || row < 0) return -1;
-            int idx = row * cols + col;
-            if (idx >= items.Count) return -1;
-            int insideX = x - margin - col * stepX;
-            int insideY = y - margin - row * stepY;
-            if (insideX < 0 || insideX >= cellW) return -1;
-            if (insideY < 0 || insideY >= rowH) return -1;
-            return idx;
-        }
-
-        private RectangleF TileBoundsInCanvas(int idx)
-        {
-            int col = idx % cols;
-            int row = idx / cols;
-            int rowH = cellImgH + cellLabelH;
-            int x = margin + col * (cellW + margin);
-            int y = margin + row * (rowH + margin);
-            return new RectangleF(x, y, cellW, rowH);
-        }
-
-        private void BakeCanvas()
-        {
-            int rowCount = (items.Count + cols - 1) / cols;
-            int rowH = cellImgH + cellLabelH;
-            int totalW = margin + cols * cellW + cols * margin;
-            int totalH = margin + rowCount * rowH + rowCount * margin;
-            canvas = new Bitmap(totalW, totalH, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(canvas))
+            Graphics g = e.Graphics;
+            if (paths.Count == 0)
             {
                 g.Clear(BackColor);
+                return;
             }
-            AutoScrollMinSize = new Size(totalW, totalH);
-            for (int i = 0; i < items.Count; i++) PaintTile(i);
-            Invalidate();
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.CompositingQuality = CompositingQuality.HighSpeed;
+            g.InterpolationMode = InterpolationMode.Low;
+
+            Rectangle clip = e.ClipRectangle;
+            int ox = -AutoScrollPosition.X;
+            int oy = -AutoScrollPosition.Y;
+            int rowH = cellImgH + cellLabelH;
+            int pitchX = cellW + spacing;
+            int pitchY = rowH + spacing;
+
+            int firstCol = Math.Max(0, (clip.Left - ox - spacing) / pitchX);
+            int lastCol = Math.Min(cols - 1,
+                (clip.Right - ox - spacing) / pitchX);
+            int firstRow = Math.Max(0, (clip.Top - oy - spacing) / pitchY);
+            int lastRow = Math.Min(rows - 1,
+                (clip.Bottom - oy - spacing) / pitchY);
+
+            for (int r = firstRow; r <= lastRow; r++)
+            {
+                for (int c = firstCol; c <= lastCol; c++)
+                {
+                    int idx = r * cols + c;
+                    if (idx >= paths.Count) continue;
+                    int x = ox + spacing + c * pitchX;
+                    int y = oy + spacing + r * pitchY;
+                    DrawTile(g, idx, x, y);
+                }
+            }
         }
 
-        private void PaintTile(int idx)
+        private void DrawTile(Graphics g, int idx, int x, int y)
         {
-            if (canvas == null || idx < 0 || idx >= items.Count) return;
-            RectangleF bounds = TileBoundsInCanvas(idx);
-            int x = (int)bounds.X;
-            int y = (int)bounds.Y;
-            int w = (int)bounds.Width;
-            int h = (int)bounds.Height;
-            int imgH = cellImgH;
+            bool sel = picked.Contains(idx);
+            string path = paths[idx];
+            Bitmap thumb;
+            thumbCache.TryGetValue(path, out thumb);
 
-            using (Graphics g = Graphics.FromImage(canvas))
+            // image area
+            Rectangle imgRect = new Rectangle(x, y, cellW, cellImgH);
+            if (thumb != null)
             {
-                g.SmoothingMode = SmoothingMode.AntiAlias;
-                g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                g.CompositingQuality = CompositingQuality.HighQuality;
-
-                // Wipe to background first so any prior content (including a
-                // rounded-corner path) is fully gone before the new tile is
-                // laid down.
-                g.FillRectangle(SystemBrushes.Control, x - margin, y - margin,
-                    w + margin * 2, h + margin * 2);
-
-                // 16:9 image area
-                Rectangle imgRect = new Rectangle(x, y, w, imgH);
-                Bitmap thumb = thumbs == null ? null : thumbs[idx];
-                if (thumb != null)
+                g.DrawImage(thumb, imgRect, 0, 0, thumb.Width, thumb.Height,
+                    GraphicsUnit.Pixel);
+            }
+            else
+            {
+                using (SolidBrush b = new SolidBrush(PlaceholderBg))
                 {
-                    g.DrawImage(thumb, imgRect);
+                    g.FillRectangle(b, imgRect);
                 }
-                else
+                TextRenderer.DrawText(g, "...", placeholderFont, imgRect, Color.Gray,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+            }
+            if (sel)
+            {
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(26, Accent)))
                 {
-                    using (SolidBrush b = new SolidBrush(PlaceholderBg))
-                    {
-                        g.FillRectangle(b, imgRect);
-                    }
-                    TextRenderer.DrawText(g, "...", placeholderFont, imgRect, Color.Gray,
-                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
+                    g.FillRectangle(b, imgRect);
                 }
+            }
+            DrawCheckBox(g, x + 6, y + 6, sel);
 
-                if (picked.Contains(idx))
+            // file-name strip
+            if (cellLabelH > 0)
+            {
+                Rectangle labelRect = new Rectangle(x, y + cellImgH, cellW, cellLabelH);
+                using (SolidBrush b = new SolidBrush(SystemColors.Control))
                 {
-                    using (SolidBrush b = new SolidBrush(Color.FromArgb(26, Accent)))
-                    {
-                        g.FillRectangle(b, imgRect);
-                    }
+                    g.FillRectangle(b, labelRect);
                 }
+                TextRenderer.DrawText(g, Path.GetFileName(path), labelFont,
+                    new Rectangle(x + 3, y + cellImgH, cellW - 6, cellLabelH - 2),
+                    Color.FromArgb(70, 70, 70),
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
+                    TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine |
+                    TextFormatFlags.NoPrefix);
+            }
 
-                DrawCheckBox(g, x + 6, y + 6, picked.Contains(idx));
-
-                if (cellLabelH > 0)
-                {
-                    Rectangle labelRect = new Rectangle(x, y + imgH, w, cellLabelH);
-                    g.FillRectangle(SystemBrushes.Control, labelRect);
-                    TextRenderer.DrawText(g, Path.GetFileName(items[idx]), labelFont,
-                        new Rectangle(x + 3, y + imgH, w - 6, cellLabelH - 2),
-                        Color.FromArgb(70, 70, 70),
-                        TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
-                        TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine |
-                        TextFormatFlags.NoPrefix);
-                }
-
-                bool hot = picked.Contains(idx);
-                using (GraphicsPath path = RoundedRect(new Rectangle(x, y, w - 1, h - 1), TileRadius))
-                using (Pen pen = new Pen(hot ? Accent : BorderIdle, hot ? 2f : 1f))
-                {
-                    g.DrawPath(pen, path);
-                }
+            using (Pen pen = new Pen(sel ? Accent : BorderIdle, sel ? 2f : 1f))
+            {
+                g.DrawRectangle(pen, x, y, cellW - 1,
+                    cellImgH + cellLabelH - 1);
             }
         }
 
@@ -331,32 +435,135 @@ namespace WallpaperChanger
             }
         }
 
-        private static GraphicsPath RoundedRect(Rectangle r, int radius)
+        protected override void OnMouseDown(MouseEventArgs e)
         {
-            GraphicsPath p = new GraphicsPath();
-            int d = radius * 2;
-            p.AddArc(r.X, r.Y, d, d, 180, 90);
-            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-            p.CloseFigure();
-            return p;
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            int idx = HitTest(e.Location);
+            if (idx < 0) return;
+            bool nowPicked;
+            if (picked.Contains(idx)) { picked.Remove(idx); nowPicked = false; }
+            else { picked.Add(idx); nowPicked = true; }
+            Invalidate(TileRectOnScreen(idx));
+            Action<int, bool> h = TileToggled;
+            if (h != null) h(idx, nowPicked);
         }
 
-        private void DisposeCanvas()
+        private int HitTest(Point pt)
         {
-            if (thumbs != null)
+            if (paths.Count == 0 || cols <= 0) return -1;
+            int x = pt.X - AutoScrollPosition.X - spacing;
+            int y = pt.Y - AutoScrollPosition.Y - spacing;
+            int rowH = cellImgH + cellLabelH;
+            int col = x / Math.Max(1, cellW + spacing);
+            int row = y / Math.Max(1, rowH + spacing);
+            if (col < 0 || col >= cols || row < 0) return -1;
+            int idx = row * cols + col;
+            if (idx >= paths.Count) return -1;
+            return idx;
+        }
+
+        // ---- thumbnail decoding (shared by every layout) ----
+
+        private static Bitmap MakeThumb(string path, int w, int h)
+        {
+            if (w < 8 || h < 8) return null;
+            try
             {
-                foreach (Bitmap b in thumbs)
+                using (Image src = DecodeAny(path))
                 {
-                    if (b != null) b.Dispose();
+                    if (src == null || src.Width < 8 || src.Height < 8) return null;
+                    float scale = Math.Max((float)w / src.Width, (float)h / src.Height);
+                    float cropW = Math.Min(src.Width, w / scale);
+                    float cropH = Math.Min(src.Height, h / scale);
+                    float sx = (src.Width - cropW) / 2f;
+                    float sy = (src.Height - cropH) / 2f;
+                    Bitmap bmp = new Bitmap(w, h);
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.SmoothingMode = SmoothingMode.HighQuality;
+                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                        g.CompositingQuality = CompositingQuality.HighQuality;
+                        g.DrawImage(src, new RectangleF(0, 0, w, h),
+                            new RectangleF(sx, sy, cropW, cropH), GraphicsUnit.Pixel);
+                    }
+                    return bmp;
                 }
-                thumbs = null;
             }
-            if (canvas != null)
+            catch
             {
-                canvas.Dispose();
-                canvas = null;
+                return null;
+            }
+        }
+
+        private static Image DecodeAny(string path)
+        {
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open,
+                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (Image tmp = Image.FromStream(fs))
+                {
+                    if (tmp.Width < 8 || tmp.Height < 8) return null;
+                    return CopyToArgb(tmp);
+                }
+            }
+            catch
+            {
+            }
+            try
+            {
+                WicBitmapDecoder dec = WicBitmapDecoder.Create(new Uri(path),
+                    System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreColorProfile,
+                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                if (dec == null || dec.Frames.Count == 0) return null;
+                WicBitmapSource src = dec.Frames[0];
+                if (src == null || src.PixelWidth < 8 || src.PixelHeight < 8) return null;
+                WicBitmapSource bgra = new WicFormatConvertedBitmap(src,
+                    WicPixelFormats.Bgra32, null, 0);
+                Bitmap bmp = new Bitmap(bgra.PixelWidth, bgra.PixelHeight,
+                    PixelFormat.Format32bppArgb);
+                BitmapData data = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
+                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    bgra.CopyPixels(new WicInt32Rect(0, 0, bgra.PixelWidth, bgra.PixelHeight),
+                        data.Scan0, data.Stride * bgra.PixelHeight, data.Stride);
+                }
+                finally
+                {
+                    bmp.UnlockBits(data);
+                }
+                return bmp;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static Bitmap CopyToArgb(Image img)
+        {
+            Bitmap copy = new Bitmap(img.Width, img.Height, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(copy))
+            {
+                g.Clear(Color.Transparent);
+                g.DrawImage(img, 0, 0, img.Width, img.Height);
+            }
+            return copy;
+        }
+
+        private void SafeUi(Action a)
+        {
+            if (IsDisposed || Disposing) return;
+            try
+            {
+                if (InvokeRequired) BeginInvoke(a);
+                else a();
+            }
+            catch
+            {
             }
         }
 
@@ -364,7 +571,12 @@ namespace WallpaperChanger
         {
             if (disposing)
             {
-                DisposeCanvas();
+                relayoutTimer.Dispose();
+                foreach (Bitmap b in thumbCache.Values)
+                {
+                    if (b != null) b.Dispose();
+                }
+                thumbCache.Clear();
                 if (labelFont != null) { labelFont.Dispose(); labelFont = null; }
                 if (placeholderFont != null) { placeholderFont.Dispose(); placeholderFont = null; }
             }

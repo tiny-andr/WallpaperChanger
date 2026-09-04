@@ -1,34 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-// WIC (Windows Imaging Component) managed wrappers, referenced only for the
-// WebP fallback decoder. Aliased so System.Windows.Media.Color cannot clash
-// with System.Drawing.Color elsewhere in this file.
-using WicBitmapDecoder = System.Windows.Media.Imaging.BitmapDecoder;
-using WicBitmapSource = System.Windows.Media.Imaging.BitmapSource;
-using WicFormatConvertedBitmap = System.Windows.Media.Imaging.FormatConvertedBitmap;
-using WicInt32Rect = System.Windows.Int32Rect;
-using WicPixelFormats = System.Windows.Media.PixelFormats;
 
 namespace WallpaperChanger
 {
     // Manual wallpaper picker. Opens centered at ~3/4 of the working area on
     // the screen that owns the main window and can be maximized. The master
     // switch at the top-left is the gate: while off, the checked set below is
-    // saved but does not restrict switching. The middle is a single-canvas
-    // grid (PickerCanvas) of 16:9 tiles (7 columns at the default size, more
-    // when widened). The checked set lives at the data level (scanned files
-    // + picked paths), so filter / bulk actions are cheap even for huge
-    // libraries. Explicit save model: only "保存" writes Config and the ini.
+    // saved but does not restrict switching. The middle is a virtualized
+    // 16:9 thumbnail grid (PickerCanvas): it only renders the visible
+    // viewport, so opening, scrolling, resizing and maximizing stay smooth
+    // regardless of library size. This form is the data layer -- the canvas
+    // raises TileToggled and the form keeps Config + ini state in sync.
     public class ManualPickerForm : Form
     {
-        private const int DesignCols = 7;     // columns at the default window size
         private static readonly Color Accent = Color.FromArgb(24, 95, 165);
 
         private readonly Form ownerForm;
@@ -49,12 +37,7 @@ namespace WallpaperChanger
 
         private readonly List<string> allPaths = new List<string>();
         private readonly HashSet<string> picked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly SemaphoreSlim thumbGate = new SemaphoreSlim(4);
 
-        private int cellW;
-        private int cellImgH;
-        private int cellLabelH;
-        private int tileMargin;
         private bool scanFinished;
         private bool closing;
         private bool dirty;
@@ -214,9 +197,6 @@ namespace WallpaperChanger
             if (canvas != null && !closing) LayoutChrome();
         }
 
-        // Positions the right-aligned chrome and the canvas. Controls already
-        // auto-scaled to physical pixels keep their Y; only sizes/offsets that
-        // depend on the current window size move.
         private void LayoutChrome()
         {
             if (sf < 0.5f) sf = DeviceDpi / 96f;
@@ -234,9 +214,9 @@ namespace WallpaperChanger
 
             int top = Math.Max(btnAll.Bottom, txtFilter.Bottom) + (int)(10 * sf);
             int bottomBarH = (int)(54 * sf);
-            int gridW = ClientSize.Width - (int)(28 * sf);
-            int gridH = Math.Max(120, ClientSize.Height - top - bottomBarH);
-            canvas.SetBounds((int)(14 * sf), top, gridW, gridH);
+            canvas.SetBounds((int)(14 * sf), top,
+                ClientSize.Width - (int)(28 * sf),
+                Math.Max(120, ClientSize.Height - top - bottomBarH));
 
             lblGridInfo.SetBounds(canvas.Left + (int)(30 * sf), canvas.Top + (int)(26 * sf),
                 canvas.Width - (int)(60 * sf), (int)(60 * sf));
@@ -248,12 +228,6 @@ namespace WallpaperChanger
                 btnSave.Top);
             lblBottomHint.SetBounds((int)(16 * sf), btnSave.Top + (int)(4 * sf),
                 Math.Max(100, btnClose.Left - (int)(16 * sf) - (int)(26 * sf)), 22);
-
-            // Cell metrics depend on the current canvas width; recompute and
-            // rebuild the grid whenever the window size changes (rare during
-            // a typical session, free during maximize).
-            EnsureCellMetrics();
-            if (scanFinished && allPaths.Count > 0) RebuildCanvas();
         }
 
         private void StartScan()
@@ -292,41 +266,20 @@ namespace WallpaperChanger
                 ShowGridInfo("没有找到可用壁纸，请先在主窗口的壁纸源里添加图片文件夹");
                 return;
             }
-            EnsureCellMetrics();
             ShowGridInfo("");
-            RebuildCanvas();
+            RefreshCanvas();
         }
 
-        private void EnsureCellMetrics()
+        // Push the current filter subset + picked set into the canvas.
+        private void RefreshCanvas()
         {
-            if (canvas == null) return;
-            int padH = (int)(10 * sf);
-            int sbW = SystemInformation.VerticalScrollBarWidth;
-            int avail = canvas.ClientSize.Width - padH * 2 - sbW;
-            int gap = (int)(8 * sf);
-            cellW = (avail - (DesignCols - 1) * gap) / DesignCols;
-            if (cellW < 120) cellW = 120;
-            cellImgH = (int)(cellW * 9f / 16f);
-            cellLabelH = TextRenderer.MeasureText("Ag", Font).Height + 7;
-            tileMargin = gap / 2;
-            if (tileMargin < 3) tileMargin = 3;
-        }
-
-        // Recompute the display subset (filter applied) and rebuild the canvas
-        // around it. Caller has already ensured cell metrics are up to date.
-        private void RebuildCanvas()
-        {
-            if (canvas == null || cellW <= 0) return;
             List<string> display = FilteredPaths();
             HashSet<int> displayPicked = new HashSet<int>();
             for (int i = 0; i < display.Count; i++)
             {
                 if (picked.Contains(Normalize(display[i]))) displayPicked.Add(i);
             }
-            int cols = EstimateColumns();
-            canvas.Configure(display, displayPicked, cellW, cellImgH, cellLabelH,
-                cols, tileMargin, Font);
-            QueueAllMissingThumbs(display);
+            canvas.SetWallpapers(display, displayPicked);
         }
 
         private List<string> FilteredPaths()
@@ -340,63 +293,6 @@ namespace WallpaperChanger
                     r.Add(p);
             }
             return r;
-        }
-
-        private int EstimateColumns()
-        {
-            if (cellW <= 0) return DesignCols;
-            int avail = canvas.ClientSize.Width - (int)(20 * sf)
-                - SystemInformation.VerticalScrollBarWidth;
-            return Math.Max(1, avail / Math.Max(1, cellW + tileMargin * 2));
-        }
-
-        // Kicks off async thumbnail decodes for the paths in displayPaths
-        // that are not already loaded on the canvas. Decoded bitmaps are
-        // pushed into the canvas by index.
-        private void QueueAllMissingThumbs(List<string> displayPaths)
-        {
-            if (canvas == null) return;
-            for (int i = 0; i < displayPaths.Count; i++)
-            {
-                QueueThumbnailAt(i, displayPaths[i]);
-            }
-        }
-
-        private void QueueThumbnailAt(int displayIdx, string path)
-        {
-            int w = cellW;
-            int h = cellImgH;
-            Task.Run(async delegate
-            {
-                Bitmap bmp = null;
-                await thumbGate.WaitAsync();
-                try
-                {
-                    bmp = await Task.Run(delegate { return MakeThumb(path, w, h); });
-                }
-                catch { }
-                finally
-                {
-                    thumbGate.Release();
-                }
-                SafeUi(delegate
-                {
-                    if (closing || canvas == null || canvas.IsDisposed)
-                    {
-                        if (bmp != null) bmp.Dispose();
-                        return;
-                    }
-                    if (displayIdx >= canvas.ItemCount || canvas.ItemAt(displayIdx) != path)
-                    {
-                        // The display subset has changed (filter / rebuild)
-                        // since this decode started. Drop the bitmap so we
-                        // don't paint a stale image into the wrong slot.
-                        if (bmp != null) bmp.Dispose();
-                        return;
-                    }
-                    canvas.SetThumb(displayIdx, bmp);
-                });
-            });
         }
 
         private void OnCanvasTileToggled(int idx, bool nowPicked)
@@ -413,48 +309,33 @@ namespace WallpaperChanger
         private void OnFilterChanged()
         {
             UpdatePlaceholder();
-            if (!scanFinished || cellW <= 0) return;
-            RebuildCanvas();
+            if (!scanFinished) return;
             List<string> display = FilteredPaths();
-            string f = currentFilter();
-            if (f.Length > 0)
-            {
-                ShowGridInfo(display.Count == 0 ? "没有匹配的文件名" : "");
-            }
-            else
-            {
-                ShowGridInfo("");
-            }
+            RefreshCanvas();
+            ShowGridInfo(currentFilter().Length > 0 && display.Count == 0
+                ? "没有匹配的文件名" : "");
         }
 
         private enum BulkKind { All, None, Invert }
 
-        // Bulk actions run on the data level (whole filtered file list), so
-        // they are exact even for images whose tiles are not materialized yet;
-        // existing tiles are only refreshed afterwards for the visual state.
+        // Bulk actions run on the data level (whole filtered file list).
         private void BulkToggle(BulkKind kind)
         {
             if (!scanFinished || allPaths.Count == 0) return;
             List<string> targets = FilteredPaths();
             if (targets.Count == 0) return;
             dirty = true;
-            HashSet<int> flipped = new HashSet<int>();
-            for (int i = 0; i < targets.Count; i++)
+            foreach (string p in targets)
             {
-                string norm = Normalize(targets[i]);
+                string norm = Normalize(p);
                 bool nowPicked;
                 if (kind == BulkKind.All) nowPicked = true;
                 else if (kind == BulkKind.None) nowPicked = false;
                 else nowPicked = !picked.Contains(norm);
-                bool wasPicked = picked.Contains(norm);
-                if (nowPicked != wasPicked)
-                {
-                    flipped.Add(i);
-                    if (nowPicked) picked.Add(norm);
-                    else picked.Remove(norm);
-                }
+                if (nowPicked) picked.Add(norm);
+                else picked.Remove(norm);
             }
-            // Push new state into the canvas so its picked bits stay in sync.
+            // Push the new picked bits into the canvas for repaint.
             HashSet<int> canvasPicked = new HashSet<int>();
             for (int i = 0; i < targets.Count; i++)
             {
@@ -497,12 +378,10 @@ namespace WallpaperChanger
             int pickedCount = CountPicked();
             if (chkMaster.Checked && pickedCount == 0)
             {
-                // Master on but nothing picked means switching would have no
-                // pool to draw from. The previous modal loop was easy to get
-                // stuck in (every close attempt would re-popup). Turn the
-                // master off automatically and proceed with saving the
-                // selection (still 0). User can re-enable later when picks
-                // exist.
+                // Master on with no picks leaves no pool to switch from. The
+                // old modal loop made every close attempt re-popup; instead,
+                // turn the master off automatically and save the (empty)
+                // selection so the close path always succeeds in one click.
                 chkMaster.Checked = false;
             }
 
@@ -589,114 +468,11 @@ namespace WallpaperChanger
             }
         }
 
-        // Decode once and draw a centered cover-crop at the tile's aspect so
-        // the grid stays uniform regardless of each file's native shape.
-        // Cover means: scale the image to fill the whole tile and crop the
-        // overflow evenly on both sides, like the Windows "Fill" style --
-        // never stretch the source to the tile's aspect ratio.
-        private static Bitmap MakeThumb(string path, int w, int h)
-        {
-            if (w < 8 || h < 8) return null;
-            try
-            {
-                using (Image src = DecodeAny(path))
-                {
-                    if (src == null || src.Width < 8 || src.Height < 8) return null;
-                    float scale = Math.Max((float)w / src.Width, (float)h / src.Height);
-                    float cropW = Math.Min(src.Width, w / scale);
-                    float cropH = Math.Min(src.Height, h / scale);
-                    float sx = (src.Width - cropW) / 2f;
-                    float sy = (src.Height - cropH) / 2f;
-                    Bitmap bmp = new Bitmap(w, h);
-                    using (Graphics g = Graphics.FromImage(bmp))
-                    {
-                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                        g.SmoothingMode = SmoothingMode.HighQuality;
-                        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-                        g.CompositingQuality = CompositingQuality.HighQuality;
-                        g.DrawImage(src, new RectangleF(0, 0, w, h),
-                            new RectangleF(sx, sy, cropW, cropH), GraphicsUnit.Pixel);
-                    }
-                    return bmp;
-                }
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        // Decode an image file into an independent 32bpp Bitmap. GDI+ first
-        // (fast path for jpg/png/bmp/gif/tiff); when it fails (e.g. WebP,
-        // which GDI+ cannot open), fall back to the Windows Imaging
-        // Component via the managed BitmapDecoder. Every path copies pixels
-        // into a fresh bitmap before the source stream/codec goes away,
-        // because GDI+ images keep referencing their stream lazily.
-        private static Image DecodeAny(string path)
-        {
-            try
-            {
-                using (FileStream fs = new FileStream(path, FileMode.Open,
-                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (Image tmp = Image.FromStream(fs))
-                {
-                    if (tmp.Width < 8 || tmp.Height < 8) return null;
-                    return CopyToArgb(tmp);
-                }
-            }
-            catch
-            {
-            }
-            try
-            {
-                WicBitmapDecoder dec = WicBitmapDecoder.Create(new Uri(path),
-                    System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreColorProfile,
-                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
-                if (dec == null || dec.Frames.Count == 0) return null;
-                WicBitmapSource src = dec.Frames[0];
-                if (src == null || src.PixelWidth < 8 || src.PixelHeight < 8) return null;
-                WicBitmapSource bgra = new WicFormatConvertedBitmap(src,
-                    WicPixelFormats.Bgra32, null, 0);
-                Bitmap bmp = new Bitmap(bgra.PixelWidth, bgra.PixelHeight,
-                    PixelFormat.Format32bppArgb);
-                BitmapData data = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
-                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
-                try
-                {
-                    bgra.CopyPixels(new WicInt32Rect(0, 0, bgra.PixelWidth, bgra.PixelHeight),
-                        data.Scan0, data.Stride * bgra.PixelHeight, data.Stride);
-                }
-                finally
-                {
-                    bmp.UnlockBits(data);
-                }
-                return bmp;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        // Draw img into a fresh 32bpp bitmap so the caller never depends on
-        // img's source stream staying alive.
-        private static Bitmap CopyToArgb(Image img)
-        {
-            Bitmap copy = new Bitmap(img.Width, img.Height, PixelFormat.Format32bppArgb);
-            using (Graphics g = Graphics.FromImage(copy))
-            {
-                g.Clear(Color.Transparent);
-                g.DrawImage(img, 0, 0, img.Width, img.Height);
-            }
-            return copy;
-        }
-
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
                 closing = true;
-                if (thumbGate != null) thumbGate.Dispose();
                 if (toolTip != null) toolTip.Dispose();
                 if (canvas != null) canvas.Dispose();
             }
