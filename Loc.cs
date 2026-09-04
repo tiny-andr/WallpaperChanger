@@ -112,7 +112,7 @@ namespace WallpaperChanger
             m["main.settings.next"] = "下一张:";
             m["main.settings.prev"] = "上一张:";
             m["main.settings.autostart"] = "开机自动启动（启动文件夹快捷方式）";
-            m["main.settings.language"] = "语言:";
+            m["main.settings.language"] = "语言/Language:";
             m["main.btn.next"] = "下一张壁纸";
             m["main.btn.prev"] = "上一张壁纸";
             m["main.btn.save"] = "保存设置";
@@ -196,7 +196,7 @@ namespace WallpaperChanger
             m["main.settings.next"] = "Next:";
             m["main.settings.prev"] = "Previous:";
             m["main.settings.autostart"] = "Start with Windows (shortcut in Startup folder)";
-            m["main.settings.language"] = "Language:";
+            m["main.settings.language"] = "语言/Language:";
             m["main.btn.next"] = "Next wallpaper";
             m["main.btn.prev"] = "Previous wallpaper";
             m["main.btn.save"] = "Save settings";
@@ -280,7 +280,7 @@ namespace WallpaperChanger
             m["main.settings.next"] = "次へ:";
             m["main.settings.prev"] = "前へ:";
             m["main.settings.autostart"] = "Windows 起動時に自動開始（スタートアップのショートカット）";
-            m["main.settings.language"] = "言語:";
+            m["main.settings.language"] = "语言/Language:";
             m["main.btn.next"] = "次の壁紙";
             m["main.btn.prev"] = "前の壁紙";
             m["main.btn.save"] = "設定を保存";
