@@ -101,9 +101,10 @@ namespace WallpaperChanger
             Emit("", bodyFont, bodyColor, 0);
 
             Emit("■ 新增壁纸何时生效", headFont, headColor, 0);
-            Emit("  • 程序不实时监控文件夹；每次切换（定时到点、Ctrl+9 或点击\"下一张壁纸\"）都会重新扫描目录。", bodyFont, bodyColor, 0);
+            Emit("  • 程序不实时监控文件夹；定时到点会重新扫描并挑一张新壁纸（手动\"下一张\"则先走历史）。", bodyFont, bodyColor, 0);
             Emit("  • 新增图片会自动纳入轮换；随机模式下会重新洗牌，之后很快就能轮到新图。", bodyFont, bodyColor, 0);
-            Emit("  • \"上一张\"属于历史回退、不触发扫描，只会回到本次启动后已经显示过的壁纸。", bodyFont, bodyColor, 0);
+            Emit("  • \"上一张\" / \"下一张\"在本次启动的历史里来回走：回退后按\"下一张\"会先恢复刚才回退掉的那张，", bodyFont, bodyColor, 0);
+            Emit("    历史走完才会重新扫描挑新图；\"上一张\"最远回到本次启动时显示的那张壁纸。", bodyFont, bodyColor, 0);
 
             rtb.SelectionStart = 0;
             rtb.SelectionLength = 0;

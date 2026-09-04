@@ -46,6 +46,14 @@ namespace WallpaperChanger
         private readonly List<string> history = new List<string>();
         private const int HistoryLimit = 300;
 
+        // "Forward" stack for redo (browser-style back/forward): whenever
+        // "previous" steps away from a wallpaper, that wallpaper is pushed
+        // here, and the next "next" pops it and re-applies it instead of
+        // picking a fresh random one. This keeps Next -> Prev -> Next
+        // returning to the exact same image the user just stepped back from.
+        private readonly List<string> forward = new List<string>();
+        private int lastTotal;   // image count of the most recent scan, for the redo status line
+
         public MainForm()
         {
             Text = "WallpaperChanger v" + Application.ProductVersion;
@@ -66,7 +74,9 @@ namespace WallpaperChanger
             BuildTray();
 
             rotateTimer = new System.Windows.Forms.Timer();
-            rotateTimer.Tick += delegate { NextWallpaper(); };
+            // Automatic rotation always advances to a fresh wallpaper (never
+            // "redo"s a manual previous/next step).
+            rotateTimer.Tick += delegate { AutoRotate(); };
 
             Config.Load();
             Log.Write("config: hotkey=" + Config.Hotkey + ", folders=" + Config.Folders.Count);
@@ -515,6 +525,9 @@ namespace WallpaperChanger
             Activate();
         }
 
+        // Manual "next" entry (hotkey / button / tray): redo-aware. If the
+        // user pressed "previous" and is pressing "next" again, restore the
+        // wallpaper they stepped away from instead of jumping to a new pick.
         private void NextWallpaper()
         {
             if (busy) return;
@@ -525,6 +538,72 @@ namespace WallpaperChanger
             }
 
             busy = true;
+
+            if (forward.Count > 0)
+            {
+                StartRedoTask();
+                return;
+            }
+
+            StartFreshPickTask();
+        }
+
+        // Automatic rotation: always move to a fresh wallpaper and abandon
+        // any pending redo (the user is effectively navigating anew), so a
+        // stale "forward" entry can never pop back up later by surprise.
+        private void AutoRotate()
+        {
+            if (busy) return;
+            if (!HasValidFolders()) return;
+            busy = true;
+            StartFreshPickTask();
+        }
+
+        // Restore the most recent "previous"-departed wallpaper (redo).
+        private void StartRedoTask()
+        {
+            string path = forward[forward.Count - 1];
+            forward.RemoveAt(forward.Count - 1);
+            int total = lastTotal;
+            Task.Run(delegate
+            {
+                bool ok = false;
+                try
+                {
+                    ok = WallpaperEngine.Apply(path, Config.Style);
+                }
+                catch
+                {
+                    ok = false;
+                }
+                string name = Path.GetFileName(path);
+                SafeUi(delegate
+                {
+                    try
+                    {
+                        if (ok)
+                        {
+                            PushHistory(path);
+                            Log.Write("next(redo): " + path);
+                            SetStatus("当前壁纸: " + name + "（共 " + total + " 张）");
+                        }
+                        else
+                        {
+                            Log.Write("redo apply failed: " + path);
+                            SetStatus("壁纸设置失败: " + name);
+                        }
+                    }
+                    finally
+                    {
+                        busy = false;
+                    }
+                });
+            });
+        }
+
+        private void StartFreshPickTask()
+        {
+            forward.Clear();
             List<string> folders = new List<string>(Config.Folders);
             bool recursive = Config.Recursive;
 
@@ -538,7 +617,11 @@ namespace WallpaperChanger
                     count = imgs.Count;
                     if (count == 0)
                     {
-                        SafeUi(delegate { SetStatus("所有文件夹里都没有可用图片"); });
+                        SafeUi(delegate
+                        {
+                            try { SetStatus("所有文件夹里都没有可用图片"); }
+                            finally { busy = false; }
+                        });
                         return;
                     }
                     picked = PickNext(imgs);
@@ -546,16 +629,17 @@ namespace WallpaperChanger
                 catch (Exception ex)
                 {
                     Log.Write("scan error: " + ex.Message);
-                }
-                finally
-                {
                     busy = false;
+                    return;
                 }
 
                 if (picked != null)
                 {
-                    string path = picked;
-                    SafeUi(delegate { ApplyOnUiThread(path, count); });
+                    SafeUi(delegate { ApplyOnUiThread(picked, count); });
+                }
+                else
+                {
+                    busy = false;
                 }
             });
         }
@@ -608,6 +692,7 @@ namespace WallpaperChanger
                 {
                     Log.Write("applied: " + path);
                     PushHistory(path);
+                    lastTotal = total;
                     SetStatus("当前壁纸: " + Path.GetFileName(path) + "（共 " + total + " 张）");
                 }
                 else
@@ -620,6 +705,10 @@ namespace WallpaperChanger
             {
                 Log.Write("apply error: " + ex.Message);
                 SetStatus("出错: " + ex.Message);
+            }
+            finally
+            {
+                busy = false;
             }
         }
 
@@ -679,9 +768,22 @@ namespace WallpaperChanger
             if (history.Count > HistoryLimit) history.RemoveRange(0, history.Count - HistoryLimit);
         }
 
+        // Park a wallpaper that "previous" stepped away from (newest pushed
+        // last). "Next" pops this stack to redo. Mirrors PushHistory's dedupe.
+        private void PushForward(string path)
+        {
+            try { path = Path.GetFullPath(path); }
+            catch { }
+            int n = forward.Count;
+            if (n > 0 && string.Equals(forward[n - 1], path, StringComparison.OrdinalIgnoreCase)) return;
+            forward.Add(path);
+        }
+
         // Step back to the wallpaper that was up before the current one.
         // Re-applies the file directly (no scan needed); each press walks one
-        // step further back, and "next" afterwards still moves forward again.
+        // step further back, and "next" afterwards redo-restores the departed
+        // wallpaper. Once the forward stack is empty, "next" resumes normal
+        // fresh picks.
         private void PrevWallpaper()
         {
             if (busy) return;
@@ -715,7 +817,11 @@ namespace WallpaperChanger
                     {
                         if (ok)
                         {
+                            // Park the wallpaper we just stepped away from so a
+                            // following "next" can return to it (redo).
+                            string departed = history[history.Count - 1];
                             history.RemoveAt(history.Count - 1);   // drop the current entry
+                            PushForward(departed);
                             Log.Write("previous: " + target);
                             SetStatus("当前壁纸: " + name + "（上一张）");
                         }
