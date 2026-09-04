@@ -50,7 +50,10 @@ namespace WallpaperChanger
         private static readonly Color Accent = Color.FromArgb(24, 95, 165);
         private static readonly Color BorderIdle = Color.FromArgb(176, 176, 176);
         private static readonly Color PlaceholderBg = Color.FromArgb(240, 240, 240);
-        private const int DesignCols = 7;
+        public const int DesignCols = 7;
+        private const int DesignCellW = 258;
+        private const int DesignCellImgH = 145;
+        private const int DesignSpacing = 8;
 
         private readonly List<string> paths = new List<string>();
         private readonly HashSet<int> picked = new HashSet<int>();
@@ -63,19 +66,37 @@ namespace WallpaperChanger
         private Font labelFont;
         private Font placeholderFont;
 
-        private int spacing = 8;          // gap between tiles (physical px)
-        private int cellW = 258;
-        private int cellImgH = 145;
+        private float scaleFactor = 1f;
+        private int spacing = DesignSpacing;
+        private int cellW = DesignCellW;
+        private int cellImgH = DesignCellImgH;
         private int cellLabelH = 22;
         private int cols = DesignCols;
         private int rows;
-        private bool dirtyThumbsForCell;  // cell size changed -> cache invalid
 
         public event Action<int, bool> TileToggled;
 
         public int ItemCount { get { return paths.Count; } }
         public string ItemAt(int idx) { return paths[idx]; }
         public bool IsPicked(int idx) { return picked.Contains(idx); }
+
+        public float ScaleFactor
+        {
+            get { return scaleFactor; }
+            set
+            {
+                if (value < 0.5f) value = 1f;
+                scaleFactor = value;
+                cellW = (int)(DesignCellW * value);
+                cellImgH = (int)(DesignCellImgH * value);
+                spacing = Math.Max(4, (int)(DesignSpacing * value));
+                cellLabelH = Math.Max(20,
+                    TextRenderer.MeasureText("Ag", labelFont).Height + 6);
+            }
+        }
+
+        public int CellWidth { get { return cellW; } }
+        public int Spacing { get { return spacing; } }
 
         public PickerCanvas()
         {
@@ -84,8 +105,6 @@ namespace WallpaperChanger
                      ControlStyles.UserPaint |
                      ControlStyles.Opaque, true);
             AutoScroll = true;
-            HScroll = false;
-            VScroll = true;
             BackColor = SystemColors.Control;
             TabStop = false;
             labelFont = new Font("Microsoft YaHei UI", 9F);
@@ -177,29 +196,7 @@ namespace WallpaperChanger
             relayoutTimer.Stop();
             if (paths.Count == 0 || ClientSize.Width < 40) return;
 
-            int oldImgW = cellW;
-            ComputeMetrics();
-
-            if (cellW != oldImgW)
-            {
-                // Cell geometry changed (window width crossed a threshold):
-                // cached thumbnails were decoded for the old size.
-                dirtyThumbsForCell = true;
-            }
-            if (dirtyThumbsForCell && cellW != oldImgW)
-            {
-                // Cache may hold null placeholders for files that failed to
-                // decode; those must not be disposed.
-                foreach (Bitmap b in thumbCache.Values)
-                {
-                    if (b != null) b.Dispose();
-                }
-                thumbCache.Clear();
-                decoding.Clear();
-                dirtyThumbsForCell = false;
-                PrimeDecodeQueue();
-            }
-
+            cols = DesignCols;
             rows = (paths.Count + cols - 1) / cols;
             int contentW = spacing + cols * (cellW + spacing);
             int rowH = cellImgH + cellLabelH;
@@ -207,27 +204,6 @@ namespace WallpaperChanger
             AutoScrollMinSize = new Size(contentW, contentH);
             if (forceResetScroll) AutoScrollPosition = new Point(0, 0);
             Invalidate();
-        }
-
-        private void ComputeMetrics()
-        {
-            spacing = Math.Max(6, ClientSize.Width / 220);
-            int avail = ClientSize.Width - spacing * 2
-                - SystemInformation.VerticalScrollBarWidth;
-            if (avail < 200) avail = 200;
-            cellW = (avail - (DesignCols - 1) * spacing) / DesignCols;
-            if (cellW < 120) cellW = 120;
-            if (cellW > 330) cellW = 330;
-            int availCols = Math.Max(1, (avail + spacing) / (cellW + spacing));
-            // The bigger the window, the more columns fit; the grid simply
-            // recomputes the row/col mapping on relayout.
-            int calcCols = Math.Max(1, avail / Math.Max(1, cellW + spacing));
-            cols = Math.Max(1, calcCols);
-            cellImgH = (int)(cellW * 9f / 16f);
-            cellLabelH = Math.Max(20,
-                TextRenderer.MeasureText("Ag", labelFont).Height + 6);
-            // Discard layout vars that are not needed.
-            GC.KeepAlive(availCols);
         }
 
         private void PrimeDecodeQueue()
@@ -254,37 +230,37 @@ namespace WallpaperChanger
 
         private void PumpDecoder()
         {
-            int startCount = decoding.Count;
             while (decoding.Count < 4 && decodeQueue.Count > 0)
             {
                 string path = decodeQueue.Dequeue();
+                if (thumbCache.ContainsKey(path) || decoding.Contains(path)) continue;
                 decoding.Add(path);
                 int w = cellW;
                 int h = cellImgH;
                 Task.Run(delegate
                 {
-                    Bitmap bmp = MakeThumb(path, w, h);
-                    decoding.Remove(path);
-                    if (bmp != null)
+                    Bitmap cached = ThumbCache.Get(path, w, h);
+                    if (cached != null)
                     {
-                        SafeUi(delegate { SetThumb(path, bmp); });
+                        decoding.Remove(path);
+                        SafeUi(delegate { SetThumb(path, cached); });
+                        SafeUi(PumpDecoder);
+                        return;
+                    }
+
+                    ThumbCache.Generate(path, w, h);
+                    cached = ThumbCache.Get(path, w, h);
+                    decoding.Remove(path);
+                    if (cached != null)
+                    {
+                        SafeUi(delegate { SetThumb(path, cached); });
                     }
                     else
                     {
-                        // Decode failed: remember a null so we do not queue
-                        // this path forever.
-                        SafeUi(delegate
-                        {
-                            thumbCache[path] = null;
-                        });
+                        SafeUi(delegate { thumbCache[path] = null; });
                     }
-                    // Continue draining the queue from a thread-pool thread.
                     SafeUi(PumpDecoder);
                 });
-            }
-            if (startCount == 0 && decodeQueue.Count == 0)
-            {
-                // all queued items are decoding or cached; nothing to do
             }
         }
 
@@ -342,7 +318,10 @@ namespace WallpaperChanger
             // coordinates ourselves. AutoScrollPosition is <= 0 once the
             // viewport is scrolled into the content, and ADDING it to a
             // content coordinate yields the viewport coordinate.
-            Rectangle clip = e.ClipRectangle;
+            //
+            // Use the physical viewport (ClientRectangle) for visibility
+            // math so we never draw into the scrollbar area.
+            Rectangle viewport = ClientRectangle;
             int ox = AutoScrollPosition.X;
             int oy = AutoScrollPosition.Y;
 
@@ -351,18 +330,18 @@ namespace WallpaperChanger
             // otherwise it keeps stale/black pixels.
             using (SolidBrush bg = new SolidBrush(BackColor))
             {
-                g.FillRectangle(bg, clip);
+                g.FillRectangle(bg, viewport);
             }
             int rowH = cellImgH + cellLabelH;
             int pitchX = cellW + spacing;
             int pitchY = rowH + spacing;
 
-            int firstCol = Math.Max(0, (clip.Left - ox - spacing) / pitchX);
+            int firstCol = Math.Max(0, (viewport.Left - ox - spacing) / pitchX);
             int lastCol = Math.Min(cols - 1,
-                (clip.Right - ox - spacing) / pitchX);
-            int firstRow = Math.Max(0, (clip.Top - oy - spacing) / pitchY);
+                (viewport.Right - ox - spacing) / pitchX);
+            int firstRow = Math.Max(0, (viewport.Top - oy - spacing) / pitchY);
             int lastRow = Math.Min(rows - 1,
-                (clip.Bottom - oy - spacing) / pitchY);
+                (viewport.Bottom - oy - spacing) / pitchY);
 
             for (int r = firstRow; r <= lastRow; r++)
             {

@@ -167,7 +167,15 @@ namespace WallpaperChanger
             base.OnLoad(e);
             sf = DeviceDpi / 96f;
 
-            int minW = (int)(940 * sf);
+            canvas.ScaleFactor = sf;
+
+            // The picker grid is fixed at 7 columns of 258x145 logical px tiles.
+            // Minimum client width must fit the grid content plus margins and a
+            // vertical scrollbar; add a small frame allowance.
+            int frameAllowance = (int)(38 * sf);
+            int gridContentW = canvas.Spacing + PickerCanvas.DesignCols * (canvas.CellWidth + canvas.Spacing);
+            int minClientW = (int)(28 * sf) + gridContentW + (int)(17 * sf) + frameAllowance;
+            int minW = minClientW;
             int minH = (int)(620 * sf);
             MinimumSize = new Size(minW, minH);
 
