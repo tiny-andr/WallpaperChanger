@@ -452,6 +452,9 @@ namespace WallpaperChanger
 
         // Decode once and draw a centered cover-crop at the tile's aspect so
         // the grid stays uniform regardless of each file's native shape.
+        // Cover means: scale the image to fill the whole tile and crop the
+        // overflow evenly on both sides, like the Windows "Fill" style --
+        // never stretch the source to the tile's aspect ratio.
         private static Bitmap MakeThumb(string path, int w, int h)
         {
             if (w < 8 || h < 8) return null;
@@ -462,11 +465,15 @@ namespace WallpaperChanger
                 using (Image src = Image.FromStream(fs))
                 {
                     if (src.Width < 8 || src.Height < 8) return null;
-                    float scale = Math.Max((float)src.Width / w, (float)src.Height / h);
-                    int sw = Math.Min(src.Width, (int)Math.Ceiling(w * scale));
-                    int sh = Math.Min(src.Height, (int)Math.Ceiling(h * scale));
-                    int sx = (src.Width - sw) / 2;
-                    int sy = (src.Height - sh) / 2;
+                    // Uniform scale that makes the image cover the tile
+                    // (at least one dimension matches the destination).
+                    float scale = Math.Max((float)w / src.Width, (float)h / src.Height);
+                    // The part of the source visible inside the tile keeps
+                    // the tile's aspect, so no distortion can happen.
+                    float cropW = Math.Min(src.Width, w / scale);
+                    float cropH = Math.Min(src.Height, h / scale);
+                    float sx = (src.Width - cropW) / 2f;
+                    float sy = (src.Height - cropH) / 2f;
                     Bitmap bmp = new Bitmap(w, h);
                     using (Graphics g = Graphics.FromImage(bmp))
                     {
@@ -475,7 +482,7 @@ namespace WallpaperChanger
                         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                         g.CompositingQuality = CompositingQuality.HighQuality;
                         g.DrawImage(src, new RectangleF(0, 0, w, h),
-                            new RectangleF(sx, sy, sw, sh), GraphicsUnit.Pixel);
+                            new RectangleF(sx, sy, cropW, cropH), GraphicsUnit.Pixel);
                     }
                     return bmp;
                 }
