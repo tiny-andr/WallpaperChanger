@@ -21,12 +21,11 @@ namespace WallpaperChanger
     // Manual wallpaper picker. Opens centered at ~3/4 of the working area on
     // the screen that owns the main window and can be maximized. The master
     // switch at the top-left is the gate: while off, the checked set below is
-    // saved but does not restrict switching. The middle is a scrollable grid
-    // of 16:9 tiles (7 columns at the default size, more when widened). The
-    // checked set lives at the data level (scanned files + picked paths), so
-    // filter / bulk actions are cheap even for huge libraries; tiles are only
-    // materialized around the viewport and thumbnails decode in the
-    // background. Explicit save model: only 保存 writes Config and the ini.
+    // saved but does not restrict switching. The middle is a single-canvas
+    // grid (PickerCanvas) of 16:9 tiles (7 columns at the default size, more
+    // when widened). The checked set lives at the data level (scanned files
+    // + picked paths), so filter / bulk actions are cheap even for huge
+    // libraries. Explicit save model: only "保存" writes Config and the ini.
     public class ManualPickerForm : Form
     {
         private const int DesignCols = 7;     // columns at the default window size
@@ -41,19 +40,17 @@ namespace WallpaperChanger
         private TextBox txtFilter;
         private Label lblPlaceholder;
         private Label lblCount;
-        private FlowLayoutPanel grid;
+        private PickerCanvas canvas;
         private Label lblGridInfo;
         private Label lblBottomHint;
         private Button btnClose;
         private Button btnSave;
         private ToolTip toolTip;
 
-        private readonly List<string> scanned = new List<string>();
-        private readonly List<WallpaperTile> tiles = new List<WallpaperTile>();
+        private readonly List<string> allPaths = new List<string>();
         private readonly HashSet<string> picked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly SemaphoreSlim thumbGate = new SemaphoreSlim(4);
 
-        private int nextTileIndex;
         private int cellW;
         private int cellImgH;
         private int cellLabelH;
@@ -142,13 +139,10 @@ namespace WallpaperChanger
             lblCount.SetBounds(0, 48, 150, 26);
             Controls.Add(lblCount);
 
-            grid = new FlowLayoutPanel();
-            grid.AutoScroll = true;
-            grid.WrapContents = true;
-            grid.BackColor = SystemColors.Control;
-            grid.SetBounds(14, 92, 400, 400);
-            grid.Scroll += delegate { OnGridScroll(); };
-            Controls.Add(grid);
+            canvas = new PickerCanvas();
+            canvas.TileToggled += OnCanvasTileToggled;
+            canvas.SetBounds(14, 92, 400, 400);
+            Controls.Add(canvas);
 
             lblGridInfo = new Label();
             lblGridInfo.Text = "";
@@ -217,12 +211,12 @@ namespace WallpaperChanger
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
-            if (grid != null && !closing) LayoutChrome();
+            if (canvas != null && !closing) LayoutChrome();
         }
 
-        // Positions the right-aligned chrome and the middle grid. Controls the
-        // AutoScale pass already converted to physical pixels keep their Y;
-        // only sizes/offsets that depend on the current window size move.
+        // Positions the right-aligned chrome and the canvas. Controls already
+        // auto-scaled to physical pixels keep their Y; only sizes/offsets that
+        // depend on the current window size move.
         private void LayoutChrome()
         {
             if (sf < 0.5f) sf = DeviceDpi / 96f;
@@ -240,12 +234,12 @@ namespace WallpaperChanger
 
             int top = Math.Max(btnAll.Bottom, txtFilter.Bottom) + (int)(10 * sf);
             int bottomBarH = (int)(54 * sf);
-            grid.SetBounds((int)(14 * sf), top,
-                ClientSize.Width - (int)(28 * sf),
-                Math.Max(120, ClientSize.Height - top - bottomBarH));
+            int gridW = ClientSize.Width - (int)(28 * sf);
+            int gridH = Math.Max(120, ClientSize.Height - top - bottomBarH);
+            canvas.SetBounds((int)(14 * sf), top, gridW, gridH);
 
-            lblGridInfo.SetBounds(grid.Left + (int)(30 * sf), grid.Top + (int)(26 * sf),
-                grid.Width - (int)(60 * sf), (int)(60 * sf));
+            lblGridInfo.SetBounds(canvas.Left + (int)(30 * sf), canvas.Top + (int)(26 * sf),
+                canvas.Width - (int)(60 * sf), (int)(60 * sf));
             lblGridInfo.Font = Font;
 
             btnSave.Location = new Point(right - btnSave.Width,
@@ -254,6 +248,12 @@ namespace WallpaperChanger
                 btnSave.Top);
             lblBottomHint.SetBounds((int)(16 * sf), btnSave.Top + (int)(4 * sf),
                 Math.Max(100, btnClose.Left - (int)(16 * sf) - (int)(26 * sf)), 22);
+
+            // Cell metrics depend on the current canvas width; recompute and
+            // rebuild the grid whenever the window size changes (rare during
+            // a typical session, free during maximize).
+            EnsureCellMetrics();
+            if (scanFinished && allPaths.Count > 0) RebuildCanvas();
         }
 
         private void StartScan()
@@ -270,38 +270,39 @@ namespace WallpaperChanger
 
         private void OnScanDone(List<string> found)
         {
-            scanned.Clear();
-            scanned.AddRange(found);
+            allPaths.Clear();
+            allPaths.AddRange(found);
 
             picked.Clear();
             HashSet<string> saved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string p in Config.ManualPicked)
             {
-                try { saved.Add(Path.GetFullPath(p)); }
+                try { saved.Add(Normalize(p)); }
                 catch { }
             }
-            foreach (string p in scanned)
+            foreach (string p in allPaths)
             {
                 if (saved.Contains(Normalize(p))) picked.Add(Normalize(p));
             }
 
             scanFinished = true;
             UpdateCountText();
-            if (scanned.Count == 0)
+            if (allPaths.Count == 0)
             {
                 ShowGridInfo("没有找到可用壁纸，请先在主窗口的壁纸源里添加图片文件夹");
                 return;
             }
             EnsureCellMetrics();
             ShowGridInfo("");
-            EnsureEnoughTiles();
+            RebuildCanvas();
         }
 
         private void EnsureCellMetrics()
         {
+            if (canvas == null) return;
             int padH = (int)(10 * sf);
             int sbW = SystemInformation.VerticalScrollBarWidth;
-            int avail = grid.ClientSize.Width - padH * 2 - sbW;
+            int avail = canvas.ClientSize.Width - padH * 2 - sbW;
             int gap = (int)(8 * sf);
             cellW = (avail - (DesignCols - 1) * gap) / DesignCols;
             if (cellW < 120) cellW = 120;
@@ -311,117 +312,58 @@ namespace WallpaperChanger
             if (tileMargin < 3) tileMargin = 3;
         }
 
-        // Column pitch (cell + margins), used to translate pixels to tiles.
-        private int TilePitchX()
+        // Recompute the display subset (filter applied) and rebuild the canvas
+        // around it. Caller has already ensured cell metrics are up to date.
+        private void RebuildCanvas()
         {
-            return cellW + tileMargin * 2;
+            if (canvas == null || cellW <= 0) return;
+            List<string> display = FilteredPaths();
+            HashSet<int> displayPicked = new HashSet<int>();
+            for (int i = 0; i < display.Count; i++)
+            {
+                if (picked.Contains(Normalize(display[i]))) displayPicked.Add(i);
+            }
+            int cols = EstimateColumns();
+            canvas.Configure(display, displayPicked, cellW, cellImgH, cellLabelH,
+                cols, tileMargin, Font);
+            QueueAllMissingThumbs(display);
         }
 
-        private int TilePitchY()
+        private List<string> FilteredPaths()
         {
-            return cellImgH + cellLabelH + tileMargin * 2;
+            string f = currentFilter();
+            if (f.Length == 0) return new List<string>(allPaths);
+            List<string> r = new List<string>();
+            foreach (string p in allPaths)
+            {
+                if (Path.GetFileName(p).IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
+                    r.Add(p);
+            }
+            return r;
         }
 
         private int EstimateColumns()
         {
             if (cellW <= 0) return DesignCols;
-            int avail = grid.ClientSize.Width - (int)(20 * sf) - SystemInformation.VerticalScrollBarWidth;
-            return Math.Max(1, avail / Math.Max(1, TilePitchX()));
+            int avail = canvas.ClientSize.Width - (int)(20 * sf)
+                - SystemInformation.VerticalScrollBarWidth;
+            return Math.Max(1, avail / Math.Max(1, cellW + tileMargin * 2));
         }
 
-        // Create every remaining tile so the grid shows the full library up
-        // front (no hidden "load more" paginator, no scroll-to-bottom dance).
-        // Tile Controls are very cheap; thumbnails decode in the background.
-        private void EnsureEnoughTiles()
+        // Kicks off async thumbnail decodes for the paths in displayPaths
+        // that are not already loaded on the canvas. Decoded bitmaps are
+        // pushed into the canvas by index.
+        private void QueueAllMissingThumbs(List<string> displayPaths)
         {
-            if (!scanFinished || closing || cellW <= 0) return;
-            while (nextTileIndex < scanned.Count)
+            if (canvas == null) return;
+            for (int i = 0; i < displayPaths.Count; i++)
             {
-                string path = scanned[nextTileIndex];
-                nextTileIndex++;
-                CreateTile(path);
-            }
-            ApplyFilter();
-        }
-
-        private void OnGridScroll()
-        {
-            if (!scanFinished || closing) return;
-            // Idempotent: any tiles not yet created (e.g. user typed in the
-            // filter before scan finished) get materialised now. Otherwise
-            // this is a cheap no-op.
-            EnsureEnoughTiles();
-        }
-
-        private void OnFilterChanged()
-        {
-            UpdatePlaceholder();
-            if (!scanFinished || cellW <= 0) return;
-            ApplyFilter();
-            string f = currentFilter();
-            if (f.Length > 0)
-            {
-                ScrollToFirstMatch();
-                ShowGridInfo(CountVisibleTiles() == 0 ? "没有匹配的文件名" : "");
-            }
-            else
-            {
-                ShowGridInfo("");
+                QueueThumbnailAt(i, displayPaths[i]);
             }
         }
 
-        // Bring the first visible tile into the viewport so the user sees
-        // that the filter found something. Best-effort; scroll metrics are
-        // not always available during layout.
-        private void ScrollToFirstMatch()
+        private void QueueThumbnailAt(int displayIdx, string path)
         {
-            if (grid == null || tiles.Count == 0) return;
-            int cols = EstimateColumns();
-            for (int i = 0; i < tiles.Count; i++)
-            {
-                if (!tiles[i].Visible) continue;
-                int row = i / Math.Max(1, cols);
-                int y = Math.Max(0, row * TilePitchY() - (int)(4 * sf));
-                try { grid.AutoScrollPosition = new Point(0, y); }
-                catch { }
-                return;
-            }
-        }
-
-        private int CountVisibleTiles()
-        {
-            int n = 0;
-            foreach (WallpaperTile t in tiles)
-            {
-                if (t.Visible) n++;
-            }
-            return n;
-        }
-
-        private void CreateTile(string path)
-        {
-            WallpaperTile tile = new WallpaperTile(path, cellW, cellImgH, cellLabelH);
-            tile.Margin = new Padding(tileMargin);
-            tile.Selected = picked.Contains(Normalize(path));
-            tile.Click += delegate { OnTileClick(tile); };
-            toolTip.SetToolTip(tile, path);
-            grid.Controls.Add(tile);
-            tiles.Add(tile);
-            QueueThumbnail(tile);
-        }
-
-        private void OnTileClick(WallpaperTile tile)
-        {
-            string norm = Normalize(tile.FilePath);
-            if (tile.Selected) picked.Add(norm);
-            else picked.Remove(norm);
-            dirty = true;
-            UpdateCountText();
-        }
-
-        private void QueueThumbnail(WallpaperTile tile)
-        {
-            string path = tile.FilePath;
             int w = cellW;
             int h = cellImgH;
             Task.Run(async delegate
@@ -437,13 +379,214 @@ namespace WallpaperChanger
                 {
                     thumbGate.Release();
                 }
-                if (bmp == null) return;
                 SafeUi(delegate
                 {
-                    if (!closing && !tile.IsDisposed) tile.SetThumbnail(bmp);
-                    else bmp.Dispose();
+                    if (closing || canvas == null || canvas.IsDisposed)
+                    {
+                        if (bmp != null) bmp.Dispose();
+                        return;
+                    }
+                    if (displayIdx >= canvas.ItemCount || canvas.ItemAt(displayIdx) != path)
+                    {
+                        // The display subset has changed (filter / rebuild)
+                        // since this decode started. Drop the bitmap so we
+                        // don't paint a stale image into the wrong slot.
+                        if (bmp != null) bmp.Dispose();
+                        return;
+                    }
+                    canvas.SetThumb(displayIdx, bmp);
                 });
             });
+        }
+
+        private void OnCanvasTileToggled(int idx, bool nowPicked)
+        {
+            if (canvas == null || idx >= canvas.ItemCount) return;
+            string path = canvas.ItemAt(idx);
+            string norm = Normalize(path);
+            if (nowPicked) picked.Add(norm);
+            else picked.Remove(norm);
+            dirty = true;
+            UpdateCountText();
+        }
+
+        private void OnFilterChanged()
+        {
+            UpdatePlaceholder();
+            if (!scanFinished || cellW <= 0) return;
+            RebuildCanvas();
+            List<string> display = FilteredPaths();
+            string f = currentFilter();
+            if (f.Length > 0)
+            {
+                ShowGridInfo(display.Count == 0 ? "没有匹配的文件名" : "");
+            }
+            else
+            {
+                ShowGridInfo("");
+            }
+        }
+
+        private enum BulkKind { All, None, Invert }
+
+        // Bulk actions run on the data level (whole filtered file list), so
+        // they are exact even for images whose tiles are not materialized yet;
+        // existing tiles are only refreshed afterwards for the visual state.
+        private void BulkToggle(BulkKind kind)
+        {
+            if (!scanFinished || allPaths.Count == 0) return;
+            List<string> targets = FilteredPaths();
+            if (targets.Count == 0) return;
+            dirty = true;
+            HashSet<int> flipped = new HashSet<int>();
+            for (int i = 0; i < targets.Count; i++)
+            {
+                string norm = Normalize(targets[i]);
+                bool nowPicked;
+                if (kind == BulkKind.All) nowPicked = true;
+                else if (kind == BulkKind.None) nowPicked = false;
+                else nowPicked = !picked.Contains(norm);
+                bool wasPicked = picked.Contains(norm);
+                if (nowPicked != wasPicked)
+                {
+                    flipped.Add(i);
+                    if (nowPicked) picked.Add(norm);
+                    else picked.Remove(norm);
+                }
+            }
+            // Push new state into the canvas so its picked bits stay in sync.
+            HashSet<int> canvasPicked = new HashSet<int>();
+            for (int i = 0; i < targets.Count; i++)
+            {
+                if (picked.Contains(Normalize(targets[i]))) canvasPicked.Add(i);
+            }
+            canvas.ApplyPicked(canvasPicked);
+            UpdateCountText();
+        }
+
+        private string currentFilter()
+        {
+            return txtFilter == null ? "" : txtFilter.Text.Trim();
+        }
+
+        private void UpdatePlaceholder()
+        {
+            if (lblPlaceholder == null || txtFilter == null) return;
+            lblPlaceholder.Visible = txtFilter.Text.Trim().Length == 0 && !txtFilter.Focused;
+        }
+
+        private void UpdateCountText()
+        {
+            if (lblCount == null) return;
+            int n = 0;
+            foreach (string p in allPaths)
+            {
+                if (picked.Contains(Normalize(p))) n++;
+            }
+            lblCount.Text = "已选 " + n + " / 共 " + allPaths.Count;
+        }
+
+        private void ShowGridInfo(string text)
+        {
+            lblGridInfo.Text = text;
+            lblGridInfo.Visible = text.Length > 0;
+        }
+
+        private void Save()
+        {
+            int pickedCount = CountPicked();
+            if (chkMaster.Checked && pickedCount == 0)
+            {
+                // Master on but nothing picked means switching would have no
+                // pool to draw from. The previous modal loop was easy to get
+                // stuck in (every close attempt would re-popup). Turn the
+                // master off automatically and proceed with saving the
+                // selection (still 0). User can re-enable later when picks
+                // exist.
+                chkMaster.Checked = false;
+            }
+
+            Config.ManualSelectionEnabled = chkMaster.Checked;
+            List<string> picks = new List<string>();
+            foreach (string p in allPaths)
+            {
+                if (picked.Contains(Normalize(p))) picks.Add(p);
+            }
+            Config.ManualPicked = picks;
+            Config.Save();
+            dirty = false;
+            savedMessage = chkMaster.Checked
+                ? "已保存：手动壁纸选择已启用，切换范围为已勾选的 " + picks.Count + " 张壁纸"
+                : "已保存：手动壁纸选择已关闭（勾选集合已保留，" + picks.Count + " 张）";
+            UpdateHint();
+        }
+
+        private int CountPicked()
+        {
+            int n = 0;
+            foreach (string p in allPaths)
+            {
+                if (picked.Contains(Normalize(p))) n++;
+            }
+            return n;
+        }
+
+        private void RequestClose()
+        {
+            if (dirty)
+            {
+                DialogResult r = MessageBox.Show(this,
+                    "有未保存的勾选更改，关闭前要保存吗？",
+                    "手动壁纸选择", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (r == DialogResult.Cancel) return;
+                if (r == DialogResult.Yes)
+                {
+                    Save();
+                    // dirty is now false on success; if Save flipped the
+                    // master off automatically, that's still a successful
+                    // save, so proceed to close.
+                }
+            }
+            closing = true;
+            Close();
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            if (e.CloseReason == CloseReason.UserClosing && !closing)
+            {
+                e.Cancel = true;
+                RequestClose();
+                return;
+            }
+            base.OnFormClosing(e);
+        }
+
+        private void UpdateHint()
+        {
+            if (lblBottomHint == null) return;
+            lblBottomHint.Text = savedMessage != null
+                ? savedMessage
+                : "未勾选的壁纸不参与自动 / 手动切换；随机顺序开关不受影响，仍在勾选池内打乱";
+        }
+
+        private static string Normalize(string path)
+        {
+            try { return Path.GetFullPath(path); }
+            catch { return path; }
+        }
+
+        private void SafeUi(Action a)
+        {
+            if (IsDisposed || Disposing) return;
+            try
+            {
+                if (InvokeRequired) Invoke(a);
+                else a();
+            }
+            catch
+            {
+            }
         }
 
         // Decode once and draw a centered cover-crop at the tile's aspect so
@@ -459,11 +602,7 @@ namespace WallpaperChanger
                 using (Image src = DecodeAny(path))
                 {
                     if (src == null || src.Width < 8 || src.Height < 8) return null;
-                    // Uniform scale that makes the image cover the tile
-                    // (at least one dimension matches the destination).
                     float scale = Math.Max((float)w / src.Width, (float)h / src.Height);
-                    // The part of the source visible inside the tile keeps
-                    // the tile's aspect, so no distortion can happen.
                     float cropW = Math.Min(src.Width, w / scale);
                     float cropH = Math.Min(src.Height, h / scale);
                     float sx = (src.Width - cropW) / 2f;
@@ -516,8 +655,6 @@ namespace WallpaperChanger
                 if (dec == null || dec.Frames.Count == 0) return null;
                 WicBitmapSource src = dec.Frames[0];
                 if (src == null || src.PixelWidth < 8 || src.PixelHeight < 8) return null;
-                // Normalize the frame to 32bpp BGRA so the raw pixel copy
-                // below always matches the destination layout.
                 WicBitmapSource bgra = new WicFormatConvertedBitmap(src,
                     WicPixelFormats.Bgra32, null, 0);
                 Bitmap bmp = new Bitmap(bgra.PixelWidth, bgra.PixelHeight,
@@ -554,187 +691,6 @@ namespace WallpaperChanger
             return copy;
         }
 
-        private enum BulkKind { All, None, Invert }
-
-        // Bulk actions run on the data level (whole filtered file list), so
-        // they are exact even for images whose tiles are not materialized yet;
-        // existing tiles are only refreshed afterwards for the visual state.
-        private void BulkToggle(BulkKind kind)
-        {
-            if (!scanFinished || scanned.Count == 0) return;
-            string f = currentFilter();
-            bool hasFilter = f.Length > 0;
-            List<string> targets = new List<string>();
-            foreach (string p in scanned)
-            {
-                if (!hasFilter || MatchesFilter(p)) targets.Add(p);
-            }
-            if (targets.Count == 0) return;
-
-            dirty = true;
-            foreach (string p in targets)
-            {
-                string norm = Normalize(p);
-                if (kind == BulkKind.All)
-                {
-                    if (!picked.Contains(norm)) { picked.Add(norm); }
-                }
-                else if (kind == BulkKind.None)
-                {
-                    picked.Remove(norm);
-                }
-                else
-                {
-                    if (!picked.Remove(norm)) picked.Add(norm);
-                }
-            }
-            foreach (WallpaperTile t in tiles)
-            {
-                bool want;
-                if (kind == BulkKind.All) want = true;
-                else if (kind == BulkKind.None) want = false;
-                else want = !t.Selected;
-                if (t.Selected != want) t.Selected = want;
-            }
-            UpdateCountText();
-        }
-
-        private string currentFilter()
-        {
-            return txtFilter == null ? "" : txtFilter.Text.Trim();
-        }
-
-        private bool MatchesFilter(string path)
-        {
-            string f = currentFilter();
-            if (f.Length == 0) return true;
-            return Path.GetFileName(path).IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0;
-        }
-
-        private void ApplyFilter()
-        {
-            foreach (WallpaperTile t in tiles)
-            {
-                t.Visible = MatchesFilter(t.FilePath);
-            }
-        }
-
-        private void UpdatePlaceholder()
-        {
-            if (lblPlaceholder == null || txtFilter == null) return;
-            lblPlaceholder.Visible = txtFilter.Text.Trim().Length == 0 && !txtFilter.Focused;
-        }
-
-        private void UpdateCountText()
-        {
-            if (lblCount == null) return;
-            int n = 0;
-            foreach (string p in scanned)
-            {
-                if (picked.Contains(Normalize(p))) n++;
-            }
-            lblCount.Text = "已选 " + n + " / 共 " + scanned.Count;
-        }
-
-        private void ShowGridInfo(string text)
-        {
-            lblGridInfo.Text = text;
-            lblGridInfo.Visible = text.Length > 0;
-        }
-
-        private void Save()
-        {
-            int pickedCount = CountPicked();
-            if (chkMaster.Checked && pickedCount == 0)
-            {
-                MessageBox.Show(this,
-                    "已开启总开关，请至少勾选一张壁纸（否则没有任何图片可切换）。\n\n" +
-                    "也可以先取消勾选总开关，仅保存勾选集合，选好后再回来开启。",
-                    "手动壁纸选择", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            Config.ManualSelectionEnabled = chkMaster.Checked;
-            List<string> picks = new List<string>();
-            foreach (string p in scanned)
-            {
-                if (picked.Contains(Normalize(p))) picks.Add(p);
-            }
-            Config.ManualPicked = picks;
-            Config.Save();
-            dirty = false;
-            savedMessage = chkMaster.Checked
-                ? "已保存：手动壁纸选择已启用，切换范围为已勾选的 " + picks.Count + " 张壁纸"
-                : "已保存：手动壁纸选择已关闭（勾选集合已保留，" + picks.Count + " 张）";
-            UpdateHint();
-        }
-
-        private int CountPicked()
-        {
-            int n = 0;
-            foreach (string p in scanned)
-            {
-                if (picked.Contains(Normalize(p))) n++;
-            }
-            return n;
-        }
-
-        private void RequestClose()
-        {
-            if (dirty)
-            {
-                DialogResult r = MessageBox.Show(this,
-                    "有未保存的勾选更改，关闭前要保存吗？",
-                    "手动壁纸选择", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                if (r == DialogResult.Cancel) return;
-                if (r == DialogResult.Yes)
-                {
-                    Save();
-                    if (dirty) return;   // Save was blocked (master on, nothing picked)
-                }
-            }
-            closing = true;
-            Close();
-        }
-
-        protected override void OnFormClosing(FormClosingEventArgs e)
-        {
-            if (e.CloseReason == CloseReason.UserClosing && !closing)
-            {
-                e.Cancel = true;
-                RequestClose();
-                return;
-            }
-            base.OnFormClosing(e);
-        }
-
-        private void UpdateHint()
-        {
-            if (lblBottomHint == null) return;
-            lblBottomHint.Text = savedMessage != null
-                ? savedMessage
-                : "未勾选的壁纸不参与自动 / 手动切换；随机顺序开关不受影响，仍在勾选池内打乱";
-        }
-
-        private static string Normalize(string path)
-        {
-            try { return Path.GetFullPath(path); }
-            catch { return path; }
-        }
-
-        private void SafeUi(Action a)
-        {
-            if (IsDisposed || Disposing) return;
-            try
-            {
-                if (InvokeRequired) Invoke(a);
-                else a();
-            }
-            catch
-            {
-            }
-        }
-
         protected override void Dispose(bool disposing)
         {
             if (disposing)
@@ -742,12 +698,7 @@ namespace WallpaperChanger
                 closing = true;
                 if (thumbGate != null) thumbGate.Dispose();
                 if (toolTip != null) toolTip.Dispose();
-                foreach (WallpaperTile t in tiles)
-                {
-                    try { t.Dispose(); }
-                    catch { }
-                }
-                tiles.Clear();
+                if (canvas != null) canvas.Dispose();
             }
             base.Dispose(disposing);
         }
