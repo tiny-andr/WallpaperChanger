@@ -30,6 +30,7 @@ namespace WallpaperChanger
         private Label lblInterval;
         private Label lblHotkey;
         private Label lblHotkeyPrev;
+        private Label lblLang;
 
         private NotifyIcon notifyIcon;
         private ContextMenuStrip trayMenu;
@@ -239,14 +240,15 @@ namespace WallpaperChanger
 
             // UI language selector: native names (中文 / English / 日本語),
             // applied immediately and persisted at once.
-            Label lblLang = new Label();
-            lblLang.SetBounds(15, 197, 74, 22);
+            lblLang = new Label();
+            lblLang.AutoSize = true;
+            lblLang.SetBounds(15, 199, 0, 22);
             gbSettings.Controls.Add(lblLang);
             lblLang.Text = Loc.T("main.settings.language");
 
             cmbLang = new ComboBox();
             cmbLang.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbLang.SetBounds(92, 193, 170, 25);
+            cmbLang.SetBounds(110, 193, 170, 25);
             cmbLang.Items.AddRange(Loc.LanguageDisplayNames);
             cmbLang.SelectedIndex = 0;
             cmbLang.SelectedIndexChanged += delegate
@@ -308,6 +310,7 @@ namespace WallpaperChanger
             lblHotkey.Text = Loc.T("main.settings.next");
             lblHotkeyPrev.Text = Loc.T("main.settings.prev");
             chkAutoStart.Text = Loc.T("main.settings.autostart");
+            lblLang.Text = Loc.T("main.settings.language");
             btnNext.Text = Loc.T("main.btn.next");
             btnPrev.Text = Loc.T("main.btn.prev");
             btnSave.Text = Loc.T("main.btn.save");
