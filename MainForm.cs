@@ -17,14 +17,28 @@ namespace WallpaperChanger
         private Button btnManualPick;
         private ComboBox cmbStyle;
         private ComboBox cmbInterval;
+        private ComboBox cmbLang;
         private CheckBox chkRandom;
         private CheckBox chkAutoStart;
         private Button btnNext;
+        private Button btnPrev;
+        private Button btnSave;
         private Label lblStatus;
+        private GroupBox gbSource;
+        private GroupBox gbSettings;
+        private Label lblStyle;
+        private Label lblInterval;
+        private Label lblHotkey;
+        private Label lblHotkeyPrev;
 
         private NotifyIcon notifyIcon;
         private ContextMenuStrip trayMenu;
         private ToolStripMenuItem miPause;
+        private ToolStripMenuItem miNext;
+        private ToolStripMenuItem miPrev;
+        private ToolStripMenuItem miManual;
+        private ToolStripMenuItem miOpen;
+        private ToolStripMenuItem miExit;
         private ComboBox cmbHotkey;
         private ComboBox cmbHotkeyPrev;
         private readonly HotkeyManager hotkeyManager;
@@ -66,10 +80,13 @@ namespace WallpaperChanger
             // on any monitor, so 100% and 150% screens look identical.
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(480, 528);
+            ClientSize = new Size(480, 560);
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = SystemColors.Control;
 
+            // Suppress all "changed -> save" handlers from the very first
+            // control creation (ApplyTexts also touches combo selections).
+            loadingUi = true;
             hotkeyManager = new HotkeyManager(this);
             BuildUi();
             BuildTray();
@@ -128,8 +145,7 @@ namespace WallpaperChanger
 
         private void BuildUi()
         {
-            GroupBox gbSource = new GroupBox();
-            gbSource.Text = "壁纸源（通过按钮添加，不可手动输入）";
+            gbSource = new GroupBox();
             gbSource.SetBounds(12, 12, 456, 168);
             Controls.Add(gbSource);
 
@@ -139,19 +155,16 @@ namespace WallpaperChanger
             gbSource.Controls.Add(lstFolders);
 
             btnAdd = new Button();
-            btnAdd.Text = "添加...";
             btnAdd.SetBounds(361, 42, 82, 30);
             btnAdd.Click += delegate { BrowseFolder(); };
             gbSource.Controls.Add(btnAdd);
 
             btnRemove = new Button();
-            btnRemove.Text = "删除选中";
             btnRemove.SetBounds(361, 76, 82, 30);
             btnRemove.Click += delegate { RemoveSelectedFolder(); };
             gbSource.Controls.Add(btnRemove);
 
             btnClearAll = new Button();
-            btnClearAll.Text = "清空全部";
             btnClearAll.SetBounds(361, 110, 82, 30);
             btnClearAll.Click += delegate { ClearAllFolders(); };
             gbSource.Controls.Add(btnClearAll);
@@ -159,77 +172,61 @@ namespace WallpaperChanger
             // Manual wallpaper picker: opens the selection dialog where the
             // user curates which wallpapers participate in switching.
             btnManualPick = new Button();
-            btnManualPick.Text = "启用手动壁纸选择（勾选后仅切换选中壁纸）";
             btnManualPick.SetBounds(12, 186, 456, 32);
             btnManualPick.Click += delegate { OpenManualPicker(); };
             Controls.Add(btnManualPick);
 
-            GroupBox gbSettings = new GroupBox();
-            gbSettings.Text = "轮换设置";
-            gbSettings.SetBounds(12, 226, 456, 200);
+            gbSettings = new GroupBox();
+            gbSettings.SetBounds(12, 226, 456, 232);
             Controls.Add(gbSettings);
 
-            Label l2 = new Label();
-            l2.Text = "壁纸样式:";
-            l2.SetBounds(15, 28, 70, 22);
-            gbSettings.Controls.Add(l2);
+            lblStyle = new Label();
+            lblStyle.SetBounds(15, 28, 74, 22);
+            gbSettings.Controls.Add(lblStyle);
 
             cmbStyle = new ComboBox();
             cmbStyle.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbStyle.SetBounds(90, 25, 170, 25);
-            cmbStyle.Items.AddRange(new object[] { "填充（默认）", "适应", "拉伸", "平铺", "居中", "跨区" });
-            cmbStyle.SelectedIndex = 0;
+            cmbStyle.SetBounds(92, 25, 170, 25);
             cmbStyle.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; RestartTimer(); };
             gbSettings.Controls.Add(cmbStyle);
 
-            Label l3 = new Label();
-            l3.Text = "切换频率:";
-            l3.SetBounds(15, 62, 70, 22);
-            gbSettings.Controls.Add(l3);
+            lblInterval = new Label();
+            lblInterval.SetBounds(15, 62, 74, 22);
+            gbSettings.Controls.Add(lblInterval);
 
             cmbInterval = new ComboBox();
             cmbInterval.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbInterval.SetBounds(90, 59, 170, 25);
-            cmbInterval.Items.AddRange(new object[] { "1 分钟", "5 分钟", "10 分钟", "30 分钟", "1 小时", "6 小时", "12 小时", "24 小时" });
-            cmbInterval.SelectedIndex = 2;
+            cmbInterval.SetBounds(92, 59, 170, 25);
             cmbInterval.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; RestartTimer(); };
             gbSettings.Controls.Add(cmbInterval);
 
             chkRandom = new CheckBox();
-            chkRandom.Text = "随机图片顺序";
-            chkRandom.SetBounds(15, 96, 200, 22);
+            chkRandom.SetBounds(15, 96, 220, 22);
             chkRandom.Checked = true;
             chkRandom.CheckedChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; };
             gbSettings.Controls.Add(chkRandom);
 
-            Label lh = new Label();
-            lh.Text = "下一张:";
-            lh.SetBounds(15, 133, 52, 22);
-            gbSettings.Controls.Add(lh);
+            lblHotkey = new Label();
+            lblHotkey.SetBounds(15, 133, 52, 22);
+            gbSettings.Controls.Add(lblHotkey);
 
             cmbHotkey = new ComboBox();
             cmbHotkey.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbHotkey.SetBounds(67, 129, 128, 25);
-            cmbHotkey.Items.AddRange(new object[] { "无快捷键", "Ctrl+0", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "Ctrl+6", "Ctrl+7", "Ctrl+8", "Ctrl+9" });
-            cmbHotkey.SelectedIndex = 0;
             cmbHotkey.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; ApplyHotkey(); };
             gbSettings.Controls.Add(cmbHotkey);
 
-            Label lh2 = new Label();
-            lh2.Text = "上一张:";
-            lh2.SetBounds(202, 133, 52, 22);
-            gbSettings.Controls.Add(lh2);
+            lblHotkeyPrev = new Label();
+            lblHotkeyPrev.SetBounds(202, 133, 52, 22);
+            gbSettings.Controls.Add(lblHotkeyPrev);
 
             cmbHotkeyPrev = new ComboBox();
             cmbHotkeyPrev.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbHotkeyPrev.SetBounds(254, 129, 150, 25);
-            cmbHotkeyPrev.Items.AddRange(new object[] { "无快捷键", "Ctrl+0", "Ctrl+1", "Ctrl+2", "Ctrl+3", "Ctrl+4", "Ctrl+5", "Ctrl+6", "Ctrl+7", "Ctrl+8", "Ctrl+9" });
-            cmbHotkeyPrev.SelectedIndex = 0;
             cmbHotkeyPrev.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; ApplyHotkey(); };
             gbSettings.Controls.Add(cmbHotkeyPrev);
 
             chkAutoStart = new CheckBox();
-            chkAutoStart.Text = "开机自动启动（启动文件夹快捷方式）";
             chkAutoStart.SetBounds(15, 164, 340, 22);
             chkAutoStart.CheckedChanged += delegate
             {
@@ -240,74 +237,163 @@ namespace WallpaperChanger
             };
             gbSettings.Controls.Add(chkAutoStart);
 
+            // UI language selector: native names (中文 / English / 日本語),
+            // applied immediately and persisted at once.
+            Label lblLang = new Label();
+            lblLang.SetBounds(15, 197, 74, 22);
+            gbSettings.Controls.Add(lblLang);
+            lblLang.Text = Loc.T("main.settings.language");
+
+            cmbLang = new ComboBox();
+            cmbLang.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbLang.SetBounds(92, 193, 170, 25);
+            cmbLang.Items.AddRange(Loc.LanguageDisplayNames);
+            cmbLang.SelectedIndex = 0;
+            cmbLang.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                int i = cmbLang.SelectedIndex;
+                if (i < 0 || i >= Loc.LanguageCodes.Length) return;
+                ChangeLanguage(Loc.LanguageCodes[i]);
+            };
+            gbSettings.Controls.Add(cmbLang);
+
             btnNext = new Button();
-            btnNext.Text = "下一张壁纸";
-            btnNext.SetBounds(118, 434, 100, 32);
+            btnNext.SetBounds(118, 466, 100, 32);
             btnNext.Click += delegate { NextWallpaper(); };
             Controls.Add(btnNext);
 
-            Button btnPrev = new Button();
-            btnPrev.Text = "上一张壁纸";
-            btnPrev.SetBounds(12, 434, 100, 32);
+            btnPrev = new Button();
+            btnPrev.SetBounds(12, 466, 100, 32);
             btnPrev.Click += delegate { PrevWallpaper(); };
             Controls.Add(btnPrev);
 
-            Button btnSave = new Button();
-            btnSave.Text = "保存设置";
-            btnSave.SetBounds(224, 434, 100, 32);
+            btnSave = new Button();
+            btnSave.SetBounds(224, 466, 100, 32);
             btnSave.Click += delegate
             {
                 SaveFromUi();
                 dirty = false;
-                SetStatus("设置已保存");
-                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", "设置已保存", ToolTipIcon.Info);
+                SetStatus(Loc.T("status.saved"));
+                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.saved"), ToolTipIcon.Info);
             };
             Controls.Add(btnSave);
 
             btnHelp = new Button();
-            btnHelp.Text = "帮助";
-            btnHelp.SetBounds(330, 434, 100, 32);
+            btnHelp.SetBounds(330, 466, 100, 32);
             btnHelp.Click += delegate { new HelpForm().ShowDialog(this); };
             Controls.Add(btnHelp);
 
             lblStatus = new Label();
-            lblStatus.SetBounds(12, 476, 456, 44);
+            lblStatus.SetBounds(12, 508, 456, 44);
             lblStatus.ForeColor = Color.FromArgb(0, 90, 158);
             Controls.Add(lblStatus);
+        }
+
+        // Re-apply every user-visible string of this form (and the tray) in
+        // the active language. Called once after the controls exist and
+        // again whenever the user switches the language, so no restart is
+        // needed. Combo selections survive the item rebuilds.
+        private void ApplyTexts()
+        {
+            gbSource.Text = Loc.T("main.source.group");
+            btnAdd.Text = Loc.T("main.source.add");
+            btnRemove.Text = Loc.T("main.source.remove");
+            btnClearAll.Text = Loc.T("main.source.clear");
+            btnManualPick.Text = Loc.T("main.manual.btn");
+            gbSettings.Text = Loc.T("main.settings.group");
+            lblStyle.Text = Loc.T("main.settings.style");
+            lblInterval.Text = Loc.T("main.settings.interval");
+            chkRandom.Text = Loc.T("main.settings.random");
+            lblHotkey.Text = Loc.T("main.settings.next");
+            lblHotkeyPrev.Text = Loc.T("main.settings.prev");
+            chkAutoStart.Text = Loc.T("main.settings.autostart");
+            btnNext.Text = Loc.T("main.btn.next");
+            btnPrev.Text = Loc.T("main.btn.prev");
+            btnSave.Text = Loc.T("main.btn.save");
+            btnHelp.Text = Loc.T("main.btn.help");
+
+            SetComboItems(cmbStyle, Loc.StyleNames());
+            SetComboItems(cmbInterval, Loc.IntervalNames());
+            SetComboItems(cmbHotkey, HotkeyItems());
+            SetComboItems(cmbHotkeyPrev, HotkeyItems());
+
+            miNext.Text = Loc.T("tray.next");
+            miPrev.Text = Loc.T("tray.prev");
+            miPause.Text = rotateTimer != null && !rotateTimer.Enabled ? Loc.T("tray.resume") : Loc.T("tray.pause");
+            miManual.Text = Loc.T("tray.manual");
+            miOpen.Text = Loc.T("tray.open");
+            miExit.Text = Loc.T("tray.exit");
+            notifyIcon.Text = Loc.T("tray.tip");
+
+            // Refresh only the countdown line; the first status line (if any)
+            // is left to the next status event, which writes in the new
+            // language. Avoids seeding a bogus "paused" line during
+            // construction, when the rotate timer does not exist yet.
+            RefreshStatusLine();
+        }
+
+        private static string[] HotkeyItems()
+        {
+            List<string> items = new List<string>();
+            items.Add(Loc.T("main.hotkey.none"));
+            for (int d = 0; d <= 9; d++) items.Add("Ctrl+" + d);
+            return items.ToArray();
+        }
+
+        // Replace a DropDownList's items while keeping the selection.
+        private static void SetComboItems(ComboBox cmb, string[] items)
+        {
+            if (cmb == null) return;
+            int sel = cmb.SelectedIndex;
+            cmb.Items.Clear();
+            cmb.Items.AddRange(items);
+            if (sel >= 0 && sel < items.Length) cmb.SelectedIndex = sel;
+        }
+
+        // Switch the whole UI language at runtime: update Loc, remember it
+        // in the config and persist right away (a language choice is an
+        // unambiguous one-click decision, no separate "save" needed).
+        private void ChangeLanguage(string lang)
+        {
+            Loc.SetLanguage(lang);
+            Config.Language = lang;
+            Config.Save();
+            ApplyTexts();
         }
 
         private void BuildTray()
         {
             trayMenu = new ContextMenuStrip();
 
-            ToolStripMenuItem miNext = new ToolStripMenuItem("下一张壁纸");
+            miNext = new ToolStripMenuItem();
             miNext.Click += delegate { NextWallpaper(); };
             trayMenu.Items.Add(miNext);
 
-            ToolStripMenuItem miPrev = new ToolStripMenuItem("上一张壁纸");
+            miPrev = new ToolStripMenuItem();
             miPrev.Click += delegate { PrevWallpaper(); };
             trayMenu.Items.Add(miPrev);
 
-            miPause = new ToolStripMenuItem("暂停轮换");
+            miPause = new ToolStripMenuItem();
             miPause.Click += delegate { TogglePause(); };
             trayMenu.Items.Add(miPause);
 
-            ToolStripMenuItem miManual = new ToolStripMenuItem("手动壁纸选择");
+            miManual = new ToolStripMenuItem();
             miManual.Click += delegate { OpenManualPicker(); };
             trayMenu.Items.Add(miManual);
 
-            ToolStripMenuItem miOpen = new ToolStripMenuItem("打开设置");
+            miOpen = new ToolStripMenuItem();
             miOpen.Click += delegate { ShowWindow(); };
             trayMenu.Items.Add(miOpen);
 
             trayMenu.Items.Add(new ToolStripSeparator());
 
-            ToolStripMenuItem miExit = new ToolStripMenuItem("退出");
+            miExit = new ToolStripMenuItem();
             miExit.Click += delegate
             {
                 if (dirty)
                 {
-                    DialogResult r = MessageBox.Show("有未保存的设置更改，退出前要保存吗？",
+                    DialogResult r = MessageBox.Show(Loc.T("tray.exit.confirm"),
                         "WallpaperChanger", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
                     if (r == DialogResult.Cancel) return;
                     if (r == DialogResult.Yes) SaveFromUi();
@@ -320,10 +406,12 @@ namespace WallpaperChanger
 
             notifyIcon = new NotifyIcon();
             notifyIcon.Icon = LoadAppIcon();
-            notifyIcon.Text = "WallpaperChanger - 壁纸轮换";
             notifyIcon.ContextMenuStrip = trayMenu;
             notifyIcon.DoubleClick += delegate { ShowWindow(); };
             notifyIcon.Visible = true;
+
+            // Fill every caption (controls + tray) in the active language.
+            ApplyTexts();
         }
 
         // Use the exe's own icon (the nice one embedded via ApplicationIcon)
@@ -344,7 +432,7 @@ namespace WallpaperChanger
         {
             using (FolderBrowserDialog dlg = new FolderBrowserDialog())
             {
-                dlg.Description = "选择一个壁纸图片文件夹";
+                dlg.Description = Loc.T("dialog.pickfolder");
                 string seed = FirstExistingFolder();
                 if (seed != null) dlg.SelectedPath = seed;
                 if (dlg.ShowDialog(this) == DialogResult.OK)
@@ -371,7 +459,7 @@ namespace WallpaperChanger
             {
                 if (string.Equals(existing.Trim(), folder, StringComparison.OrdinalIgnoreCase))
                 {
-                    SetStatus("该文件夹已经在壁纸源列表里");
+                    SetStatus(Loc.T("status.folder.dup"));
                     return;
                 }
             }
@@ -392,7 +480,7 @@ namespace WallpaperChanger
             int i = lstFolders.SelectedIndex;
             if (i < 0)
             {
-                SetStatus("请先在列表中选中要删除的壁纸源");
+                SetStatus(Loc.T("status.folder.pickfirst"));
                 return;
             }
             Config.Folders.RemoveAt(i);
@@ -405,7 +493,7 @@ namespace WallpaperChanger
         {
             if (Config.Folders.Count == 0)
             {
-                SetStatus("壁纸源列表已经是空的");
+                SetStatus(Loc.T("status.folder.empty"));
                 return;
             }
             Config.Folders.Clear();
@@ -518,16 +606,16 @@ namespace WallpaperChanger
             if (rotateTimer.Enabled)
             {
                 rotateTimer.Stop();
-                miPause.Text = "继续轮换";
-                SetStatus("已暂停轮换");
-                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", "轮换已暂停", ToolTipIcon.Info);
+                miPause.Text = Loc.T("tray.resume");
+                SetStatus(Loc.T("status.rotate.paused"));
+                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.paused"), ToolTipIcon.Info);
             }
             else
             {
                 rotateTimer.Start();
-                miPause.Text = "暂停轮换";
-                SetStatus("轮换已恢复");
-                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", "轮换已恢复", ToolTipIcon.Info);
+                miPause.Text = Loc.T("tray.pause");
+                SetStatus(Loc.T("status.rotate.resumed"));
+                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.rotate.resumed"), ToolTipIcon.Info);
             }
         }
 
@@ -554,11 +642,11 @@ namespace WallpaperChanger
                 RefreshStatusLine();
                 if (nowOn)
                     notifyIcon.ShowBalloonTip(1800, "WallpaperChanger",
-                        "已启用手动壁纸选择（勾选 " + Config.ManualPicked.Count + " 张参与切换）",
+                        Loc.F("balloon.manual.on", Config.ManualPicked.Count),
                         ToolTipIcon.Info);
                 else
                     notifyIcon.ShowBalloonTip(1800, "WallpaperChanger",
-                        "已关闭手动壁纸选择，恢复全部壁纸切换", ToolTipIcon.Info);
+                        Loc.T("balloon.manual.off"), ToolTipIcon.Info);
             }
         }
 
@@ -570,7 +658,7 @@ namespace WallpaperChanger
             if (busy) return;
             if (!HasValidFolders())
             {
-                SetStatus("请先添加至少一个有效的图片文件夹");
+                SetStatus(Loc.T("status.novalidfolder"));
                 return;
             }
 
@@ -622,12 +710,12 @@ namespace WallpaperChanger
                         {
                             PushHistory(path);
                             Log.Write("next(redo): " + path);
-                            SetStatus("当前壁纸: " + name + "（共 " + total + " 张）" + ModeTag());
+                            SetStatus(Loc.F("status.current", name, total) + ModeTag());
                         }
                         else
                         {
                             Log.Write("redo apply failed: " + path);
-                            SetStatus("壁纸设置失败: " + name);
+                            SetStatus(Loc.F("status.applyfail", name));
                         }
                     }
                     finally
@@ -660,8 +748,8 @@ namespace WallpaperChanger
                             try
                             {
                                 SetStatus(Config.ManualSelectionEnabled
-                                    ? "手动模式已开启，但勾选集合里没有可用图片（请打开手动壁纸选择勾选）"
-                                    : "所有文件夹里都没有可用图片");
+                                    ? Loc.T("status.manual.emptypool")
+                                    : Loc.T("status.nopictures"));
                             }
                             finally { busy = false; }
                         });
@@ -736,18 +824,18 @@ namespace WallpaperChanger
                     Log.Write("applied: " + path);
                     PushHistory(path);
                     lastTotal = total;
-                    SetStatus("当前壁纸: " + Path.GetFileName(path) + "（共 " + total + " 张）" + ModeTag());
+                    SetStatus(Loc.F("status.current", Path.GetFileName(path), total) + ModeTag());
                 }
                 else
                 {
                     Log.Write("apply failed: " + path);
-                    SetStatus("壁纸设置失败: " + Path.GetFileName(path));
+                    SetStatus(Loc.F("status.applyfail", Path.GetFileName(path)));
                 }
             }
             catch (Exception ex)
             {
                 Log.Write("apply error: " + ex.Message);
-                SetStatus("出错: " + ex.Message);
+                SetStatus(Loc.F("status.error", ex.Message));
             }
             finally
             {
@@ -828,7 +916,7 @@ namespace WallpaperChanger
         private string ModeTag()
         {
             return Config.ManualSelectionEnabled
-                ? "　[手动模式 · " + Config.ManualPicked.Count + " 张]"
+                ? Loc.F("mode.tag", Config.ManualPicked.Count)
                 : "";
         }
 
@@ -865,7 +953,7 @@ namespace WallpaperChanger
             if (busy) return;
             if (history.Count < 2)
             {
-                SetStatus("没有更早的壁纸了（这是本次启动后的第一张）");
+                SetStatus(Loc.T("status.noprev"));
                 return;
             }
 
@@ -899,11 +987,11 @@ namespace WallpaperChanger
                             history.RemoveAt(history.Count - 1);   // drop the current entry
                             PushForward(departed);
                             Log.Write("previous: " + target);
-                            SetStatus("当前壁纸: " + name + "（上一张）" + ModeTag());
+                            SetStatus(Loc.F("status.current.prev", name) + ModeTag());
                         }
                         else
                         {
-                            SetStatus("壁纸回退失败: " + name);
+                            SetStatus(Loc.F("status.prevfail", name));
                         }
                     }
                     finally
@@ -931,9 +1019,11 @@ namespace WallpaperChanger
 
         private string NextSwitchText()
         {
-            if (rotateTimer.Enabled)
-                return "下次切换: " + DateTime.Now.AddMilliseconds(rotateTimer.Interval).ToString("HH:mm:ss");
-            return "轮换已暂停";
+            // rotateTimer is created after BuildUi/BuildTray, and ApplyTexts
+            // runs inside BuildTray, so it can still be null here.
+            if (rotateTimer != null && rotateTimer.Enabled)
+                return Loc.F("status.nextswitch", DateTime.Now.AddMilliseconds(rotateTimer.Interval).ToString("HH:mm:ss"));
+            return Loc.T("status.paused");
         }
 
         private void SafeUi(Action a)
@@ -959,7 +1049,7 @@ namespace WallpaperChanger
                 {
                     trayNotified = true;
                     notifyIcon.ShowBalloonTip(2000, "WallpaperChanger",
-                        "程序仍在后台运行，右键托盘图标可暂停 / 退出", ToolTipIcon.Info);
+                        Loc.T("balloon.stillrunning"), ToolTipIcon.Info);
                 }
                 return;
             }

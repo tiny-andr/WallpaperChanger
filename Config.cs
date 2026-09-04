@@ -67,6 +67,10 @@ namespace WallpaperChanger
         public static int Hotkey = -1;            // -1 none, 0-9 = Ctrl+digit (next wallpaper)
         public static int HotkeyPrev = 8;         // -1 none, 0-9 = Ctrl+digit (previous wallpaper)
 
+        // UI language: "zh" / "en" / "ja". Empty string means "not chosen
+        // yet" - the app then detects from the OS UI language on first run.
+        public static string Language = "";
+
         // Manual wallpaper picker: master switch plus the checked file set.
         // When ManualSelectionEnabled is on, every forward switch (manual next,
         // auto timer) draws from scanned images that are also in ManualPicked;
@@ -128,6 +132,11 @@ namespace WallpaperChanger
                 if (single.TryGetValue("random", out v)) RandomOrder = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+                if (single.TryGetValue("language", out v))
+                {
+                    v = v.Trim().ToLowerInvariant();
+                    if (v == "zh" || v == "en" || v == "ja") Language = v;
+                }
                 if (single.TryGetValue("manual_enabled", out v)) ManualSelectionEnabled = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("hotkey", out v))
                 {
@@ -163,6 +172,7 @@ namespace WallpaperChanger
                 {
                     sb.AppendLine("picked=" + picked);
                 }
+                sb.AppendLine("language=" + (Language.Length > 0 ? Language : "zh"));
                 sb.AppendLine("interval_minutes=" + IntervalMinutes);
                 sb.AppendLine("style=" + Style);
                 sb.AppendLine("random=" + (RandomOrder ? "1" : "0"));

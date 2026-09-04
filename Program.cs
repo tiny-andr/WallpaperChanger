@@ -17,6 +17,7 @@ namespace WallpaperChanger
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 
             Config.Load();
+            Loc.Init();
 
             // Silent apply mode:  WallpaperChanger.exe /apply [file-or-folder]
             // exit codes: 0 ok, 1 apply failed, 2 bad argument, 3 no images

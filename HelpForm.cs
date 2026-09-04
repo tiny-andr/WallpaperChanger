@@ -14,7 +14,7 @@ namespace WallpaperChanger
 
         public HelpForm()
         {
-            Text = "帮助 - WallpaperChanger v" + Application.ProductVersion;
+            Text = Loc.T("help.title") + " - WallpaperChanger v" + Application.ProductVersion;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
@@ -45,7 +45,7 @@ namespace WallpaperChanger
             Controls.Add(rtb);
 
             Button btnClose = new Button();
-            btnClose.Text = "知道了";
+            btnClose.Text = Loc.T("help.gotit");
             btnClose.SetBounds(382, 422, 76, 28);
             btnClose.Click += delegate { DialogResult = DialogResult.OK; Close(); };
             Controls.Add(btnClose);
@@ -74,45 +74,13 @@ namespace WallpaperChanger
             Color headColor = Color.FromArgb(0, 60, 120);
             Color bodyColor = Color.Black;
 
-            Emit("WallpaperChanger " + Application.ProductVersion + "  使用帮助", titleFont, titleColor, 0);
-            Emit("", bodyFont, bodyColor, 0);
-
-            Emit("■ 壁纸源管理", headFont, headColor, 0);
-            Emit("  • 只能点击\"添加...\"按钮选择文件夹加入列表，不允许手动输入路径。", bodyFont, bodyColor, 0);
-            Emit("  • 选中列表中的一项后点\"删除选中\"即可移除该壁纸源。", bodyFont, bodyColor, 0);
-            Emit("  • \"清空全部\"一键移除所有壁纸源。", bodyFont, bodyColor, 0);
-            Emit("  • 可添加多个文件夹，程序会合并扫描所有来源的图片。", bodyFont, bodyColor, 0);
-            Emit("", bodyFont, bodyColor, 0);
-
-            Emit("■ 保存与后台运行", headFont, headColor, 0);
-            Emit("  • 修改任意设置后，请点击\"保存设置\"按钮，才会写入配置文件。", bodyFont, bodyColor, 0);
-            Emit("  • 关闭窗口只是最小化到托盘，程序仍在后台轮换；右键托盘图标可暂停 / 退出。", bodyFont, bodyColor, 0);
-            Emit("", bodyFont, bodyColor, 0);
-
-            Emit("■ 快捷键", headFont, headColor, 0);
-            Emit("  • 默认：Ctrl+9 = 下一张，Ctrl+8 = 上一张（可在设置中修改绑定）。", bodyFont, bodyColor, 0);
-            Emit("  • 主键盘与小键盘数字键都支持。", bodyFont, bodyColor, 0);
-            Emit("  • \"上一张\"可连续回退，最远回到本次启动时显示的那张壁纸。", bodyFont, bodyColor, 0);
-            Emit("", bodyFont, bodyColor, 0);
-
-            Emit("■ 手动壁纸选择", headFont, headColor, 0);
-            Emit("  • 点击\"启用手动壁纸选择\"打开勾选窗口；左上角\"启用手动选择功能\"是总开关，不开启时勾选不生效。", bodyFont, bodyColor, 0);
-            Emit("  • 启用后，定时轮换与\"下一张\"只从勾选的壁纸里挑（未勾选的不参与切换）；随机顺序开关不受影响。", bodyFont, bodyColor, 0);
-            Emit("  • 顶部输入框可按文件名筛选，\"全选 / 全不选 / 反选\"只作用于当前筛选出的图片。", bodyFont, bodyColor, 0);
-            Emit("  • 勾选集合与总开关都保存在配置里，重启后保持；之后新增的图片默认未勾选。", bodyFont, bodyColor, 0);
-            Emit("  • \"上一张\"属于历史回退、不受勾选限制；修改后请点窗口右下角\"保存\"才会生效。", bodyFont, bodyColor, 0);
-            Emit("", bodyFont, bodyColor, 0);
-
-            Emit("■ 支持的图片格式", headFont, headColor, 0);
-            Emit("  • jpg / png / jfif / bmp / webp / gif / tiff。", bodyFont, bodyColor, 0);
-            Emit("  • 自动跳过系统隐藏文件（如 Thumbs.db）与损坏的图片。", bodyFont, bodyColor, 0);
-            Emit("", bodyFont, bodyColor, 0);
-
-            Emit("■ 新增壁纸何时生效", headFont, headColor, 0);
-            Emit("  • 程序不实时监控文件夹；定时到点会重新扫描并挑一张新壁纸（手动\"下一张\"则先走历史）。", bodyFont, bodyColor, 0);
-            Emit("  • 新增图片会自动纳入轮换；随机模式下会重新洗牌，之后很快就能轮到新图。", bodyFont, bodyColor, 0);
-            Emit("  • \"上一张\" / \"下一张\"在本次启动的历史里来回走：回退后按\"下一张\"会先恢复刚才回退掉的那张，", bodyFont, bodyColor, 0);
-            Emit("    历史走完才会重新扫描挑新图；\"上一张\"最远回到本次启动时显示的那张壁纸。", bodyFont, bodyColor, 0);
+            Emit("WallpaperChanger " + Application.ProductVersion + "  " + Loc.T("help.title"),
+                titleFont, titleColor, 0);
+            foreach (Loc.HelpLine line in Loc.HelpContent())
+            {
+                if (line.Kind == 1) Emit(line.Text, headFont, headColor, 0);
+                else Emit(line.Text, bodyFont, bodyColor, 0);
+            }
 
             rtb.SelectionStart = 0;
             rtb.SelectionLength = 0;

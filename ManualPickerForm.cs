@@ -48,7 +48,7 @@ namespace WallpaperChanger
         public ManualPickerForm(Form owner)
         {
             ownerForm = owner;
-            Text = "手动壁纸选择 - WallpaperChanger v" + Application.ProductVersion;
+            Text = Loc.F("picker.title", Application.ProductVersion);
             FormBorderStyle = FormBorderStyle.Sizable;
             MaximizeBox = true;
             MinimizeBox = true;
@@ -68,33 +68,33 @@ namespace WallpaperChanger
         private void BuildChrome()
         {
             chkMaster = new CheckBox();
-            chkMaster.Text = "启用手动选择功能";
+            chkMaster.Text = Loc.T("picker.master");
             chkMaster.Font = new Font(Font, FontStyle.Bold);
             chkMaster.SetBounds(16, 12, 220, 26);
-            chkMaster.CheckedChanged += delegate { if (!loadingInitial) dirty = true; };
+            chkMaster.CheckedChanged += delegate { if (!loadingInitial) dirty = true; UpdateMasterHint(); };
             Controls.Add(chkMaster);
 
             lblMasterHint = new Label();
-            lblMasterHint.Text = "总开关 · 关闭状态下，下方勾选只保存、不参与切换";
+            lblMasterHint.Text = "";
             lblMasterHint.AutoSize = true;
             lblMasterHint.SetBounds(244, 15, 10, 10);
             lblMasterHint.ForeColor = Color.FromArgb(96, 96, 96);
             Controls.Add(lblMasterHint);
 
             btnAll = new Button();
-            btnAll.Text = "全选";
+            btnAll.Text = Loc.T("picker.all");
             btnAll.SetBounds(0, 48, 66, 28);
             btnAll.Click += delegate { BulkToggle(BulkKind.All); };
             Controls.Add(btnAll);
 
             btnNone = new Button();
-            btnNone.Text = "全不选";
+            btnNone.Text = Loc.T("picker.none");
             btnNone.SetBounds(0, 48, 66, 28);
             btnNone.Click += delegate { BulkToggle(BulkKind.None); };
             Controls.Add(btnNone);
 
             btnInvert = new Button();
-            btnInvert.Text = "反选";
+            btnInvert.Text = Loc.T("picker.invert");
             btnInvert.SetBounds(0, 48, 66, 28);
             btnInvert.Click += delegate { BulkToggle(BulkKind.Invert); };
             Controls.Add(btnInvert);
@@ -107,7 +107,7 @@ namespace WallpaperChanger
             Controls.Add(txtFilter);
 
             lblPlaceholder = new Label();
-            lblPlaceholder.Text = "筛选文件名（不区分大小写）…";
+            lblPlaceholder.Text = Loc.T("picker.filter.hint");
             lblPlaceholder.ForeColor = Color.Gray;
             lblPlaceholder.AutoSize = false;
             lblPlaceholder.SetBounds(0, 51, 280, 22);
@@ -115,7 +115,7 @@ namespace WallpaperChanger
             Controls.Add(lblPlaceholder);
 
             lblCount = new Label();
-            lblCount.Text = "已选 0 / 共 0";
+            lblCount.Text = Loc.F("picker.count", 0, 0);
             lblCount.AutoSize = false;
             lblCount.TextAlign = ContentAlignment.MiddleRight;
             lblCount.ForeColor = Accent;
@@ -141,7 +141,7 @@ namespace WallpaperChanger
             Controls.Add(lblBottomHint);
 
             btnSave = new Button();
-            btnSave.Text = "保存";
+            btnSave.Text = Loc.T("picker.save");
             btnSave.FlatStyle = FlatStyle.Flat;
             btnSave.FlatAppearance.BorderSize = 0;
             btnSave.BackColor = Accent;
@@ -151,7 +151,7 @@ namespace WallpaperChanger
             Controls.Add(btnSave);
 
             btnClose = new Button();
-            btnClose.Text = "关闭";
+            btnClose.Text = Loc.T("picker.close");
             btnClose.SetBounds(0, 0, 96, 34);
             btnClose.Click += delegate { RequestClose(); };
             Controls.Add(btnClose);
@@ -193,6 +193,7 @@ namespace WallpaperChanger
             loadingInitial = true;
             chkMaster.Checked = Config.ManualSelectionEnabled;
             loadingInitial = false;
+            UpdateMasterHint();
 
             LayoutChrome();
             UpdateHint();
@@ -242,7 +243,7 @@ namespace WallpaperChanger
         {
             List<string> folders = new List<string>(Config.Folders);
             bool recursive = Config.Recursive;
-            ShowGridInfo("正在扫描图片…");
+            ShowGridInfo(Loc.T("picker.scanning"));
             Task.Run(delegate
             {
                 List<string> found = ImageScanner.ScanMany(folders, recursive);
@@ -271,7 +272,7 @@ namespace WallpaperChanger
             UpdateCountText();
             if (allPaths.Count == 0)
             {
-                ShowGridInfo("没有找到可用壁纸，请先在主窗口的壁纸源里添加图片文件夹");
+                ShowGridInfo(Loc.T("picker.nofolders"));
                 return;
             }
             ShowGridInfo("");
@@ -321,7 +322,7 @@ namespace WallpaperChanger
             List<string> display = FilteredPaths();
             RefreshCanvas();
             ShowGridInfo(currentFilter().Length > 0 && display.Count == 0
-                ? "没有匹配的文件名" : "");
+                ? Loc.T("picker.nofiltermatch") : "");
         }
 
         private enum BulkKind { All, None, Invert }
@@ -372,7 +373,7 @@ namespace WallpaperChanger
             {
                 if (picked.Contains(Normalize(p))) n++;
             }
-            lblCount.Text = "已选 " + n + " / 共 " + allPaths.Count;
+            lblCount.Text = Loc.F("picker.count", n, allPaths.Count);
         }
 
         private void ShowGridInfo(string text)
@@ -384,6 +385,21 @@ namespace WallpaperChanger
         private void Save()
         {
             int pickedCount = CountPicked();
+
+            // Classic trap: the user checks wallpapers but never flips the
+            // master switch, saves, and walks away believing manual mode is
+            // running. Ask directly instead of silently keeping it off.
+            // Cancel aborts so nothing is written under a misunderstanding.
+            if (!chkMaster.Checked && pickedCount > 0)
+            {
+                DialogResult r = MessageBox.Show(this,
+                    Loc.F("picker.enable.prompt", pickedCount),
+                    Loc.T("picker.caption"),
+                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (r == DialogResult.Cancel) return;
+                if (r == DialogResult.Yes) chkMaster.Checked = true;
+            }
+
             if (chkMaster.Checked && pickedCount == 0)
             {
                 // Master on with no picks leaves no pool to switch from. The
@@ -403,8 +419,8 @@ namespace WallpaperChanger
             Config.Save();
             dirty = false;
             savedMessage = chkMaster.Checked
-                ? "已保存：手动壁纸选择已启用，切换范围为已勾选的 " + picks.Count + " 张壁纸"
-                : "已保存：手动壁纸选择已关闭（勾选集合已保留，" + picks.Count + " 张）";
+                ? Loc.F("picker.saved.on", picks.Count)
+                : Loc.F("picker.saved.off", picks.Count);
             UpdateHint();
         }
 
@@ -433,8 +449,8 @@ namespace WallpaperChanger
         {
             if (closing || !dirty) return true;
             DialogResult r = MessageBox.Show(this,
-                "有未保存的勾选更改，关闭前要保存吗？",
-                "手动壁纸选择", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                Loc.T("picker.confirm.close"),
+                Loc.T("picker.caption"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (r == DialogResult.Cancel) return false;
             if (r == DialogResult.Yes) Save();
             return true;
@@ -456,12 +472,30 @@ namespace WallpaperChanger
             base.OnFormClosing(e);
         }
 
+        // Master-switch status line: warm warning color while OFF so the
+        // gate is impossible to miss, calm green once it is enabled. The
+        // text also states plainly what the current state means.
+        private void UpdateMasterHint()
+        {
+            if (lblMasterHint == null || chkMaster == null) return;
+            if (chkMaster.Checked)
+            {
+                lblMasterHint.Text = Loc.T("picker.master.hint.on");
+                lblMasterHint.ForeColor = Color.FromArgb(0, 110, 60);
+            }
+            else
+            {
+                lblMasterHint.Text = Loc.T("picker.master.hint.off");
+                lblMasterHint.ForeColor = Color.FromArgb(196, 88, 0);
+            }
+        }
+
         private void UpdateHint()
         {
             if (lblBottomHint == null) return;
             lblBottomHint.Text = savedMessage != null
                 ? savedMessage
-                : "未勾选的壁纸不参与自动 / 手动切换；随机顺序开关不受影响，仍在勾选池内打乱";
+                : Loc.T("picker.bottom.hint");
         }
 
         private static string Normalize(string path)
