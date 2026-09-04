@@ -150,7 +150,7 @@ namespace WallpaperChanger
             if (thumbCache.TryGetValue(path, out old))
             {
                 if (ReferenceEquals(old, bmp)) { bmp.Dispose(); return; }
-                old.Dispose();
+                if (old != null) old.Dispose();
             }
             thumbCache[path] = bmp;
             Invalidate(TileRectByPath(path));
@@ -188,7 +188,12 @@ namespace WallpaperChanger
             }
             if (dirtyThumbsForCell && cellW != oldImgW)
             {
-                foreach (Bitmap b in thumbCache.Values) b.Dispose();
+                // Cache may hold null placeholders for files that failed to
+                // decode; those must not be disposed.
+                foreach (Bitmap b in thumbCache.Values)
+                {
+                    if (b != null) b.Dispose();
+                }
                 thumbCache.Clear();
                 decoding.Clear();
                 dirtyThumbsForCell = false;
@@ -332,9 +337,22 @@ namespace WallpaperChanger
             g.CompositingQuality = CompositingQuality.HighSpeed;
             g.InterpolationMode = InterpolationMode.Low;
 
+            // The Graphics of a ScrollableControl is NOT translated by the
+            // scroll offset, so map content coordinates to viewport
+            // coordinates ourselves. AutoScrollPosition is <= 0 once the
+            // viewport is scrolled into the content, and ADDING it to a
+            // content coordinate yields the viewport coordinate.
             Rectangle clip = e.ClipRectangle;
-            int ox = -AutoScrollPosition.X;
-            int oy = -AutoScrollPosition.Y;
+            int ox = AutoScrollPosition.X;
+            int oy = AutoScrollPosition.Y;
+
+            // The Opaque control style skips OnPaintBackground, so the area
+            // of the viewport not covered by tiles must be filled here,
+            // otherwise it keeps stale/black pixels.
+            using (SolidBrush bg = new SolidBrush(BackColor))
+            {
+                g.FillRectangle(bg, clip);
+            }
             int rowH = cellImgH + cellLabelH;
             int pitchX = cellW + spacing;
             int pitchY = rowH + spacing;
