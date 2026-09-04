@@ -4,6 +4,10 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- WPF assemblies are referenced only for the managed WIC wrapper
+         (BitmapDecoder), used as a fallback decoder for formats GDI+ cannot
+         open (e.g. WebP on Win10 1809+). No XAML is used. -->
+    <UseWPF>true</UseWPF>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>WallpaperChanger</AssemblyName>

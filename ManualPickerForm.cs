@@ -2,10 +2,19 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+// WIC (Windows Imaging Component) managed wrappers, referenced only for the
+// WebP fallback decoder. Aliased so System.Windows.Media.Color cannot clash
+// with System.Drawing.Color elsewhere in this file.
+using WicBitmapDecoder = System.Windows.Media.Imaging.BitmapDecoder;
+using WicBitmapSource = System.Windows.Media.Imaging.BitmapSource;
+using WicFormatConvertedBitmap = System.Windows.Media.Imaging.FormatConvertedBitmap;
+using WicInt32Rect = System.Windows.Int32Rect;
+using WicPixelFormats = System.Windows.Media.PixelFormats;
 
 namespace WallpaperChanger
 {
@@ -447,11 +456,9 @@ namespace WallpaperChanger
             if (w < 8 || h < 8) return null;
             try
             {
-                using (FileStream fs = new FileStream(path, FileMode.Open,
-                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-                using (Image src = Image.FromStream(fs))
+                using (Image src = DecodeAny(path))
                 {
-                    if (src.Width < 8 || src.Height < 8) return null;
+                    if (src == null || src.Width < 8 || src.Height < 8) return null;
                     // Uniform scale that makes the image cover the tile
                     // (at least one dimension matches the destination).
                     float scale = Math.Max((float)w / src.Width, (float)h / src.Height);
@@ -478,6 +485,73 @@ namespace WallpaperChanger
             {
                 return null;
             }
+        }
+
+        // Decode an image file into an independent 32bpp Bitmap. GDI+ first
+        // (fast path for jpg/png/bmp/gif/tiff); when it fails (e.g. WebP,
+        // which GDI+ cannot open), fall back to the Windows Imaging
+        // Component via the managed BitmapDecoder. Every path copies pixels
+        // into a fresh bitmap before the source stream/codec goes away,
+        // because GDI+ images keep referencing their stream lazily.
+        private static Image DecodeAny(string path)
+        {
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open,
+                    FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (Image tmp = Image.FromStream(fs))
+                {
+                    if (tmp.Width < 8 || tmp.Height < 8) return null;
+                    return CopyToArgb(tmp);
+                }
+            }
+            catch
+            {
+            }
+            try
+            {
+                WicBitmapDecoder dec = WicBitmapDecoder.Create(new Uri(path),
+                    System.Windows.Media.Imaging.BitmapCreateOptions.IgnoreColorProfile,
+                    System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
+                if (dec == null || dec.Frames.Count == 0) return null;
+                WicBitmapSource src = dec.Frames[0];
+                if (src == null || src.PixelWidth < 8 || src.PixelHeight < 8) return null;
+                // Normalize the frame to 32bpp BGRA so the raw pixel copy
+                // below always matches the destination layout.
+                WicBitmapSource bgra = new WicFormatConvertedBitmap(src,
+                    WicPixelFormats.Bgra32, null, 0);
+                Bitmap bmp = new Bitmap(bgra.PixelWidth, bgra.PixelHeight,
+                    PixelFormat.Format32bppArgb);
+                BitmapData data = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
+                    ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
+                try
+                {
+                    bgra.CopyPixels(new WicInt32Rect(0, 0, bgra.PixelWidth, bgra.PixelHeight),
+                        data.Scan0, data.Stride * bgra.PixelHeight, data.Stride);
+                }
+                finally
+                {
+                    bmp.UnlockBits(data);
+                }
+                return bmp;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // Draw img into a fresh 32bpp bitmap so the caller never depends on
+        // img's source stream staying alive.
+        private static Bitmap CopyToArgb(Image img)
+        {
+            Bitmap copy = new Bitmap(img.Width, img.Height, PixelFormat.Format32bppArgb);
+            using (Graphics g = Graphics.FromImage(copy))
+            {
+                g.Clear(Color.Transparent);
+                g.DrawImage(img, 0, 0, img.Width, img.Height);
+            }
+            return copy;
         }
 
         private enum BulkKind { All, None, Invert }

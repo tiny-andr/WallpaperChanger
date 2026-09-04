@@ -66,12 +66,14 @@ namespace WallpaperChanger
             Invalidate();
         }
 
-        // Flip the selection state. The form subscribes to Click and mirrors
-        // the new state into its picked set.
+        // Flip the selection state first, then raise Click so subscribed
+        // handlers observe the NEW state. (The picker's data layer mirrors
+        // tile.Selected into its picked set on Click; if the flip ran after
+        // base.OnClick, handlers would read the stale value and drop picks.)
         protected override void OnClick(EventArgs e)
         {
-            base.OnClick(e);
             Selected = !Selected;
+            base.OnClick(e);
         }
 
         protected override void OnMouseEnter(EventArgs e)
