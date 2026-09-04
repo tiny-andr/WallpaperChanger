@@ -410,32 +410,39 @@ namespace WallpaperChanger
             return n;
         }
 
+        // The 关闭 button. This runs from a Click handler, so calling Close()
+        // here is a top-level call (NOT inside OnFormClosing) and is safe.
         private void RequestClose()
         {
-            if (dirty)
-            {
-                DialogResult r = MessageBox.Show(this,
-                    "有未保存的勾选更改，关闭前要保存吗？",
-                    "手动壁纸选择", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                if (r == DialogResult.Cancel) return;
-                if (r == DialogResult.Yes)
-                {
-                    Save();
-                    // dirty is now false on success; if Save flipped the
-                    // master off automatically, that's still a successful
-                    // save, so proceed to close.
-                }
-            }
+            if (!ConfirmCloseAllowed()) return;
             closing = true;
             Close();
         }
 
+        // Ask once per close attempt whether unsaved picks should be saved.
+        // Returns false only when the user picked Cancel.
+        private bool ConfirmCloseAllowed()
+        {
+            if (closing || !dirty) return true;
+            DialogResult r = MessageBox.Show(this,
+                "有未保存的勾选更改，关闭前要保存吗？",
+                "手动壁纸选择", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            if (r == DialogResult.Cancel) return false;
+            if (r == DialogResult.Yes) Save();
+            return true;
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            if (e.CloseReason == CloseReason.UserClosing && !closing)
+            // Title-bar X / Alt+F4 arrive here with CloseReason.UserClosing.
+            // Ask about unsaved picks, then LET THE ORIGINAL CLOSE FINISH.
+            // The previous code cancelled this close and called Close() again
+            // from inside the handler; on a modal (ShowDialog) form WinForms
+            // swallows that nested close, so the first X click did nothing
+            // and a second one was required to actually leave.
+            if (e.CloseReason == CloseReason.UserClosing && !ConfirmCloseAllowed())
             {
                 e.Cancel = true;
-                RequestClose();
                 return;
             }
             base.OnFormClosing(e);

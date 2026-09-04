@@ -15,3 +15,6 @@ WallpaperChanger.ini
 .vs/
 .idea/
 *.user
+
+# temporary UI-driving test harnesses
+.tmp-*/
