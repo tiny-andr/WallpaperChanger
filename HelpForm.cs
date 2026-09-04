@@ -95,6 +95,14 @@ namespace WallpaperChanger
             Emit("  • \"上一张\"可连续回退，最远回到本次启动时显示的那张壁纸。", bodyFont, bodyColor, 0);
             Emit("", bodyFont, bodyColor, 0);
 
+            Emit("■ 手动壁纸选择", headFont, headColor, 0);
+            Emit("  • 点击\"启用手动壁纸选择\"打开勾选窗口；左上角\"启用手动选择功能\"是总开关，不开启时勾选不生效。", bodyFont, bodyColor, 0);
+            Emit("  • 启用后，定时轮换与\"下一张\"只从勾选的壁纸里挑（未勾选的不参与切换）；随机顺序开关不受影响。", bodyFont, bodyColor, 0);
+            Emit("  • 顶部输入框可按文件名筛选，\"全选 / 全不选 / 反选\"只作用于当前筛选出的图片。", bodyFont, bodyColor, 0);
+            Emit("  • 勾选集合与总开关都保存在配置里，重启后保持；之后新增的图片默认未勾选。", bodyFont, bodyColor, 0);
+            Emit("  • \"上一张\"属于历史回退、不受勾选限制；修改后请点窗口右下角\"保存\"才会生效。", bodyFont, bodyColor, 0);
+            Emit("", bodyFont, bodyColor, 0);
+
             Emit("■ 支持的图片格式", headFont, headColor, 0);
             Emit("  • jpg / png / jfif / bmp / webp / gif / tiff。", bodyFont, bodyColor, 0);
             Emit("  • 自动跳过系统隐藏文件（如 Thumbs.db）与损坏的图片。", bodyFont, bodyColor, 0);

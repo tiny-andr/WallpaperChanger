@@ -67,6 +67,13 @@ namespace WallpaperChanger
         public static int Hotkey = -1;            // -1 none, 0-9 = Ctrl+digit (next wallpaper)
         public static int HotkeyPrev = 8;         // -1 none, 0-9 = Ctrl+digit (previous wallpaper)
 
+        // Manual wallpaper picker: master switch plus the checked file set.
+        // When ManualSelectionEnabled is on, every forward switch (manual next,
+        // auto timer) draws from scanned images that are also in ManualPicked;
+        // the random/order mode keeps working on that smaller pool unchanged.
+        public static bool ManualSelectionEnabled = false;
+        public static List<string> ManualPicked = new List<string>();
+
         private static string ConfigPath
         {
             get
@@ -82,6 +89,7 @@ namespace WallpaperChanger
                 if (!File.Exists(ConfigPath)) return;
                 Dictionary<string, string> single = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 List<string> folderList = new List<string>();
+                List<string> pickedList = new List<string>();
                 foreach (string rawLine in File.ReadAllLines(ConfigPath, Encoding.UTF8))
                 {
                     string line = rawLine.Trim();
@@ -94,6 +102,10 @@ namespace WallpaperChanger
                     {
                         if (val.Length > 0) folderList.Add(val);
                     }
+                    else if (string.Equals(key, "picked", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (val.Length > 0) pickedList.Add(val);
+                    }
                     else
                     {
                         single[key] = val;
@@ -101,6 +113,7 @@ namespace WallpaperChanger
                 }
 
                 if (folderList.Count > 0) Folders = folderList;
+                ManualPicked = pickedList;
                 string v;
                 if (single.TryGetValue("interval_minutes", out v))
                 {
@@ -115,6 +128,7 @@ namespace WallpaperChanger
                 if (single.TryGetValue("random", out v)) RandomOrder = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+                if (single.TryGetValue("manual_enabled", out v)) ManualSelectionEnabled = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("hotkey", out v))
                 {
                     int n;
@@ -139,9 +153,15 @@ namespace WallpaperChanger
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine("; WallpaperChanger configuration");
                 sb.AppendLine("; Multiple 'folder=' lines = multiple source folders");
+                sb.AppendLine("; Multiple 'picked=' lines = files checked in the manual picker");
                 foreach (string folder in Folders)
                 {
                     sb.AppendLine("folder=" + folder);
+                }
+                sb.AppendLine("manual_enabled=" + (ManualSelectionEnabled ? "1" : "0"));
+                foreach (string picked in ManualPicked)
+                {
+                    sb.AppendLine("picked=" + picked);
                 }
                 sb.AppendLine("interval_minutes=" + IntervalMinutes);
                 sb.AppendLine("style=" + Style);

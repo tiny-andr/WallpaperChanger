@@ -14,6 +14,7 @@ namespace WallpaperChanger
         private Button btnRemove;
         private Button btnClearAll;
         private Button btnHelp;
+        private Button btnManualPick;
         private ComboBox cmbStyle;
         private ComboBox cmbInterval;
         private CheckBox chkRandom;
@@ -65,7 +66,7 @@ namespace WallpaperChanger
             // on any monitor, so 100% and 150% screens look identical.
             AutoScaleDimensions = new SizeF(96F, 96F);
             AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(480, 492);
+            ClientSize = new Size(480, 528);
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = SystemColors.Control;
 
@@ -155,9 +156,17 @@ namespace WallpaperChanger
             btnClearAll.Click += delegate { ClearAllFolders(); };
             gbSource.Controls.Add(btnClearAll);
 
+            // Manual wallpaper picker: opens the selection dialog where the
+            // user curates which wallpapers participate in switching.
+            btnManualPick = new Button();
+            btnManualPick.Text = "启用手动壁纸选择（勾选后仅切换选中壁纸）";
+            btnManualPick.SetBounds(12, 186, 456, 32);
+            btnManualPick.Click += delegate { OpenManualPicker(); };
+            Controls.Add(btnManualPick);
+
             GroupBox gbSettings = new GroupBox();
             gbSettings.Text = "轮换设置";
-            gbSettings.SetBounds(12, 188, 456, 200);
+            gbSettings.SetBounds(12, 226, 456, 200);
             Controls.Add(gbSettings);
 
             Label l2 = new Label();
@@ -233,19 +242,19 @@ namespace WallpaperChanger
 
             btnNext = new Button();
             btnNext.Text = "下一张壁纸";
-            btnNext.SetBounds(118, 396, 100, 32);
+            btnNext.SetBounds(118, 434, 100, 32);
             btnNext.Click += delegate { NextWallpaper(); };
             Controls.Add(btnNext);
 
             Button btnPrev = new Button();
             btnPrev.Text = "上一张壁纸";
-            btnPrev.SetBounds(12, 396, 100, 32);
+            btnPrev.SetBounds(12, 434, 100, 32);
             btnPrev.Click += delegate { PrevWallpaper(); };
             Controls.Add(btnPrev);
 
             Button btnSave = new Button();
             btnSave.Text = "保存设置";
-            btnSave.SetBounds(224, 396, 100, 32);
+            btnSave.SetBounds(224, 434, 100, 32);
             btnSave.Click += delegate
             {
                 SaveFromUi();
@@ -257,12 +266,12 @@ namespace WallpaperChanger
 
             btnHelp = new Button();
             btnHelp.Text = "帮助";
-            btnHelp.SetBounds(330, 396, 100, 32);
+            btnHelp.SetBounds(330, 434, 100, 32);
             btnHelp.Click += delegate { new HelpForm().ShowDialog(this); };
             Controls.Add(btnHelp);
 
             lblStatus = new Label();
-            lblStatus.SetBounds(12, 440, 456, 40);
+            lblStatus.SetBounds(12, 476, 456, 44);
             lblStatus.ForeColor = Color.FromArgb(0, 90, 158);
             Controls.Add(lblStatus);
         }
@@ -282,6 +291,10 @@ namespace WallpaperChanger
             miPause = new ToolStripMenuItem("暂停轮换");
             miPause.Click += delegate { TogglePause(); };
             trayMenu.Items.Add(miPause);
+
+            ToolStripMenuItem miManual = new ToolStripMenuItem("手动壁纸选择");
+            miManual.Click += delegate { OpenManualPicker(); };
+            trayMenu.Items.Add(miManual);
 
             ToolStripMenuItem miOpen = new ToolStripMenuItem("打开设置");
             miOpen.Click += delegate { ShowWindow(); };
@@ -525,6 +538,30 @@ namespace WallpaperChanger
             Activate();
         }
 
+        // Open the manual wallpaper picker (modal, on the main window's own
+        // screen). The picker persists straight to Config on its own 保存
+        // button, so after it closes we only mirror a mode change.
+        private void OpenManualPicker()
+        {
+            bool wasOn = Config.ManualSelectionEnabled;
+            using (ManualPickerForm dlg = new ManualPickerForm(this))
+            {
+                dlg.ShowDialog(this);
+            }
+            bool nowOn = Config.ManualSelectionEnabled;
+            if (wasOn != nowOn)
+            {
+                RefreshStatusLine();
+                if (nowOn)
+                    notifyIcon.ShowBalloonTip(1800, "WallpaperChanger",
+                        "已启用手动壁纸选择（勾选 " + Config.ManualPicked.Count + " 张参与切换）",
+                        ToolTipIcon.Info);
+                else
+                    notifyIcon.ShowBalloonTip(1800, "WallpaperChanger",
+                        "已关闭手动壁纸选择，恢复全部壁纸切换", ToolTipIcon.Info);
+            }
+        }
+
         // Manual "next" entry (hotkey / button / tray): redo-aware. If the
         // user pressed "previous" and is pressing "next" again, restore the
         // wallpaper they stepped away from instead of jumping to a new pick.
@@ -585,7 +622,7 @@ namespace WallpaperChanger
                         {
                             PushHistory(path);
                             Log.Write("next(redo): " + path);
-                            SetStatus("当前壁纸: " + name + "（共 " + total + " 张）");
+                            SetStatus("当前壁纸: " + name + "（共 " + total + " 张）" + ModeTag());
                         }
                         else
                         {
@@ -614,17 +651,23 @@ namespace WallpaperChanger
                 try
                 {
                     List<string> imgs = ImageScanner.ScanMany(folders, recursive);
-                    count = imgs.Count;
+                    List<string> pool = RestrictToPicked(imgs);
+                    count = pool.Count;
                     if (count == 0)
                     {
                         SafeUi(delegate
                         {
-                            try { SetStatus("所有文件夹里都没有可用图片"); }
+                            try
+                            {
+                                SetStatus(Config.ManualSelectionEnabled
+                                    ? "手动模式已开启，但勾选集合里没有可用图片（请打开手动壁纸选择勾选）"
+                                    : "所有文件夹里都没有可用图片");
+                            }
                             finally { busy = false; }
                         });
                         return;
                     }
-                    picked = PickNext(imgs);
+                    picked = PickNext(pool);
                 }
                 catch (Exception ex)
                 {
@@ -693,7 +736,7 @@ namespace WallpaperChanger
                     Log.Write("applied: " + path);
                     PushHistory(path);
                     lastTotal = total;
-                    SetStatus("当前壁纸: " + Path.GetFileName(path) + "（共 " + total + " 张）");
+                    SetStatus("当前壁纸: " + Path.GetFileName(path) + "（共 " + total + " 张）" + ModeTag());
                 }
                 else
                 {
@@ -754,6 +797,39 @@ namespace WallpaperChanger
                 lastApplied = p;
                 return p;
             }
+        }
+
+        // When manual selection is on, narrow a fresh scan result down to the
+        // checked set (unchecked files never enter rotation). Otherwise the
+        // list is returned unchanged, so order/random modes keep working on
+        // the full pool exactly as before.
+        private List<string> RestrictToPicked(List<string> imgs)
+        {
+            if (!Config.ManualSelectionEnabled) return imgs;
+            HashSet<string> pick = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string p in Config.ManualPicked)
+            {
+                try { pick.Add(Path.GetFullPath(p)); }
+                catch { }
+            }
+            List<string> pool = new List<string>();
+            foreach (string p in imgs)
+            {
+                bool ok = false;
+                try { ok = pick.Contains(Path.GetFullPath(p)); }
+                catch { }
+                if (ok) pool.Add(p);
+            }
+            return pool;
+        }
+
+        // Status suffix shown while the manual picker gate is on, so the mode
+        // is visible on every wallpaper line without extra dialogs.
+        private string ModeTag()
+        {
+            return Config.ManualSelectionEnabled
+                ? "　[手动模式 · " + Config.ManualPicked.Count + " 张]"
+                : "";
         }
 
         // Remember an applied wallpaper (newest last). Called on the UI thread
@@ -823,7 +899,7 @@ namespace WallpaperChanger
                             history.RemoveAt(history.Count - 1);   // drop the current entry
                             PushForward(departed);
                             Log.Write("previous: " + target);
-                            SetStatus("当前壁纸: " + name + "（上一张）");
+                            SetStatus("当前壁纸: " + name + "（上一张）" + ModeTag());
                         }
                         else
                         {
