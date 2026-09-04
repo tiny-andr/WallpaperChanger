@@ -320,14 +320,13 @@ namespace WallpaperChanger
             return Math.Max(1, avail / Math.Max(1, TilePitchX()));
         }
 
-        // Enough tiles to fill the visible area plus one full spare row.
+        // Create every remaining tile so the grid shows the full library up
+        // front (no hidden "load more" paginator, no scroll-to-bottom dance).
+        // Tile Controls are very cheap; thumbnails decode in the background.
         private void EnsureEnoughTiles()
         {
             if (!scanFinished || closing || cellW <= 0) return;
-            int cols = EstimateColumns();
-            int rows = Math.Max(1, (int)Math.Ceiling(grid.ClientSize.Height / (double)Math.Max(1, TilePitchY())));
-            int need = cols * rows + cols;
-            while (nextTileIndex < scanned.Count && tiles.Count < need)
+            while (nextTileIndex < scanned.Count)
             {
                 string path = scanned[nextTileIndex];
                 nextTileIndex++;
@@ -339,56 +338,44 @@ namespace WallpaperChanger
         private void OnGridScroll()
         {
             if (!scanFinished || closing) return;
-            // Near the bottom: bring in a few more rows' worth of tiles.
-            try
-            {
-                if (grid.VerticalScroll.Value + grid.ClientSize.Height + 80 >= grid.VerticalScroll.Maximum)
-                {
-                    int cols = EstimateColumns();
-                    for (int i = 0; i < cols * 3 && nextTileIndex < scanned.Count; i++)
-                    {
-                        string path = scanned[nextTileIndex];
-                        nextTileIndex++;
-                        CreateTile(path);
-                    }
-                    ApplyFilter();
-                }
-            }
-            catch
-            {
-                // scroll metrics not available yet
-            }
+            // Idempotent: any tiles not yet created (e.g. user typed in the
+            // filter before scan finished) get materialised now. Otherwise
+            // this is a cheap no-op.
+            EnsureEnoughTiles();
         }
 
         private void OnFilterChanged()
         {
             UpdatePlaceholder();
             if (!scanFinished || cellW <= 0) return;
-            // Show enough of the new matches to browse; with an empty filter
-            // just top the viewport back up.
-            int guard = 0;
-            while (guard < 60 && nextTileIndex < scanned.Count)
-            {
-                int vis = CountVisibleTiles();
-                int want = EstimateColumns() * 3;
-                if (vis >= want) break;
-                int cols = EstimateColumns();
-                for (int i = 0; i < cols && nextTileIndex < scanned.Count; i++)
-                {
-                    string path = scanned[nextTileIndex];
-                    nextTileIndex++;
-                    CreateTile(path);
-                }
-                guard++;
-            }
             ApplyFilter();
-            if (currentFilter().Length > 0)
+            string f = currentFilter();
+            if (f.Length > 0)
             {
+                ScrollToFirstMatch();
                 ShowGridInfo(CountVisibleTiles() == 0 ? "没有匹配的文件名" : "");
             }
             else
             {
                 ShowGridInfo("");
+            }
+        }
+
+        // Bring the first visible tile into the viewport so the user sees
+        // that the filter found something. Best-effort; scroll metrics are
+        // not always available during layout.
+        private void ScrollToFirstMatch()
+        {
+            if (grid == null || tiles.Count == 0) return;
+            int cols = EstimateColumns();
+            for (int i = 0; i < tiles.Count; i++)
+            {
+                if (!tiles[i].Visible) continue;
+                int row = i / Math.Max(1, cols);
+                int y = Math.Max(0, row * TilePitchY() - (int)(4 * sf));
+                try { grid.AutoScrollPosition = new Point(0, y); }
+                catch { }
+                return;
             }
         }
 
