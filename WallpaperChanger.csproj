@@ -14,7 +14,7 @@
     <RootNamespace>WallpaperChanger</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationIcon>icon.ico</ApplicationIcon>
-    <Version>0.0.4</Version>
+    <Version>0.0.5</Version>
     <!-- The SDK appends "+<git-sha>" to InformationalVersion when the repo
          has a .git dir (SourceLink). ProductVersion then shows garbage like
          "0.0.2+3f2a9c1..." in the window/help titles. Disable it. -->
