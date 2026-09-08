@@ -634,12 +634,12 @@ namespace WallpaperChanger
         // button, so after it closes we only mirror a mode change.
         private void OpenManualPicker()
         {
-            bool wasOn = Config.ManualSelectionEnabled;
+            bool wasOn = Config.ManualPicked.Count > 0;
             using (ManualPickerForm dlg = new ManualPickerForm(this))
             {
                 dlg.ShowDialog(this);
             }
-            bool nowOn = Config.ManualSelectionEnabled;
+            bool nowOn = Config.ManualPicked.Count > 0;
             if (wasOn != nowOn)
             {
                 RefreshStatusLine();
@@ -750,7 +750,7 @@ namespace WallpaperChanger
                         {
                             try
                             {
-                                SetStatus(Config.ManualSelectionEnabled
+                                SetStatus(Config.ManualPicked.Count > 0
                                     ? Loc.T("status.manual.emptypool")
                                     : Loc.T("status.nopictures"));
                             }
@@ -890,13 +890,13 @@ namespace WallpaperChanger
             }
         }
 
-        // When manual selection is on, narrow a fresh scan result down to the
-        // checked set (unchecked files never enter rotation). Otherwise the
-        // list is returned unchanged, so order/random modes keep working on
-        // the full pool exactly as before.
+        // When any wallpaper is checked, narrow a fresh scan result down to
+        // the checked set (unchecked files never enter rotation). Otherwise
+        // the list is returned unchanged, so order/random modes keep working
+        // on the full pool exactly as before.
         private List<string> RestrictToPicked(List<string> imgs)
         {
-            if (!Config.ManualSelectionEnabled) return imgs;
+            if (Config.ManualPicked.Count == 0) return imgs;
             HashSet<string> pick = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string p in Config.ManualPicked)
             {
@@ -914,11 +914,11 @@ namespace WallpaperChanger
             return pool;
         }
 
-        // Status suffix shown while the manual picker gate is on, so the mode
+        // Status suffix shown while any wallpaper is checked, so the mode
         // is visible on every wallpaper line without extra dialogs.
         private string ModeTag()
         {
-            return Config.ManualSelectionEnabled
+            return Config.ManualPicked.Count > 0
                 ? Loc.F("mode.tag", Config.ManualPicked.Count)
                 : "";
         }

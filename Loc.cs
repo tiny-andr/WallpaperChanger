@@ -153,9 +153,6 @@ namespace WallpaperChanger
             m["balloon.manual.off"] = "已关闭手动壁纸选择，恢复全部壁纸切换";
 
             m["picker.title"] = "手动壁纸选择 - WallpaperChanger v{0}";
-            m["picker.master"] = "启用手动选择功能";
-            m["picker.master.hint.on"] = "已启用：仅勾选的壁纸参与切换";
-            m["picker.master.hint.off"] = "未启用：下方勾选只保存、不生效（保存时会询问是否启用）";
             m["picker.all"] = "全选";
             m["picker.none"] = "全不选";
             m["picker.invert"] = "反选";
@@ -167,10 +164,9 @@ namespace WallpaperChanger
             m["picker.nofolders"] = "没有找到可用壁纸，请先在主窗口的壁纸源里添加图片文件夹";
             m["picker.nofiltermatch"] = "没有匹配的文件名";
             m["picker.saved.on"] = "已保存：手动壁纸选择已启用，切换范围为已勾选的 {0} 张壁纸";
-            m["picker.saved.off"] = "已保存：手动壁纸选择已关闭（勾选集合已保留，{0} 张）";
+            m["picker.saved.off"] = "已保存：没有勾选壁纸，手动壁纸选择已关闭（恢复全部壁纸切换）";
             m["picker.confirm.close"] = "有未保存的勾选更改，关闭前要保存吗？";
             m["picker.bottom.hint"] = "未勾选的壁纸不参与自动 / 手动切换；随机顺序开关不受影响，仍在勾选池内打乱";
-            m["picker.enable.prompt"] = "已勾选 {0} 张壁纸，但\"启用手动选择功能\"总开关未开启，勾选不会生效。\n要现在启用吗？";
             m["picker.caption"] = "手动壁纸选择";
 
             m["help.title"] = "使用帮助";
@@ -237,9 +233,6 @@ namespace WallpaperChanger
             m["balloon.manual.off"] = "Manual selection disabled - all wallpapers rotate again";
 
             m["picker.title"] = "Manual wallpaper selection - WallpaperChanger v{0}";
-            m["picker.master"] = "Enable manual selection";
-            m["picker.master.hint.on"] = "Enabled: only checked wallpapers take part in switching";
-            m["picker.master.hint.off"] = "Disabled: checks below are saved but have no effect (you will be asked on save)";
             m["picker.all"] = "All";
             m["picker.none"] = "None";
             m["picker.invert"] = "Invert";
@@ -251,10 +244,9 @@ namespace WallpaperChanger
             m["picker.nofolders"] = "No wallpapers found. Add a picture folder in the main window first";
             m["picker.nofiltermatch"] = "No file name matches the filter";
             m["picker.saved.on"] = "Saved: manual selection enabled, rotation limited to {0} checked wallpapers";
-            m["picker.saved.off"] = "Saved: manual selection off (checks kept, {0} images)";
+            m["picker.saved.off"] = "Saved: no wallpapers checked, manual selection off (all wallpapers rotate)";
             m["picker.confirm.close"] = "There are unsaved changes. Save before closing?";
             m["picker.bottom.hint"] = "Unchecked wallpapers never rotate; the random-order option keeps working inside the checked set";
-            m["picker.enable.prompt"] = "You checked {0} wallpapers, but the \"Enable manual selection\" master switch is off, so the checks have no effect.\nEnable it now?";
             m["picker.caption"] = "Manual wallpaper selection";
 
             m["help.title"] = "Help";
@@ -321,9 +313,6 @@ namespace WallpaperChanger
             m["balloon.manual.off"] = "手動壁紙選択を無効にしました。すべての壁紙が対象になります";
 
             m["picker.title"] = "手動壁紙選択 - WallpaperChanger v{0}";
-            m["picker.master"] = "手動選択機能を有効化";
-            m["picker.master.hint.on"] = "有効：チェックした壁紙のみが切り替え対象になります";
-            m["picker.master.hint.off"] = "無効：チェックは保存されるだけで反映されません（保存時に確認します）";
             m["picker.all"] = "全選択";
             m["picker.none"] = "全解除";
             m["picker.invert"] = "反転";
@@ -335,10 +324,9 @@ namespace WallpaperChanger
             m["picker.nofolders"] = "利用できる壁紙がありません。先にメインウィンドウの壁紙ソースにフォルダーを追加してください";
             m["picker.nofiltermatch"] = "一致するファイル名がありません";
             m["picker.saved.on"] = "保存しました：手動壁紙選択が有効です。チェックした {0} 枚が切り替え対象です";
-            m["picker.saved.off"] = "保存しました：手動壁紙選択は無効です（チェック内容は保持、{0} 枚）";
+            m["picker.saved.off"] = "保存しました：壁紙がチェックされていないため、手動壁紙選択は無効です（すべての壁紙が対象）";
             m["picker.confirm.close"] = "未保存の変更があります。閉じる前に保存しますか？";
             m["picker.bottom.hint"] = "未チェックの壁紙は切り替え対象外です。ランダム順序の設定はそのまま動作します";
-            m["picker.enable.prompt"] = "{0} 枚の壁紙をチェックしましたが、「手動選択機能を有効化」がオフのため、チェックは反映されません。\n今すぐ有効にしますか？";
             m["picker.caption"] = "手動壁紙選択";
 
             m["help.title"] = "ヘルプ";
@@ -383,11 +371,10 @@ namespace WallpaperChanger
                 new HelpLine(0, "  • \"上一张\"可连续回退，最远回到本次启动时显示的那张壁纸。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 手动壁纸选择"),
-                new HelpLine(0, "  • 点击\"手动壁纸选择\"打开勾选窗口；左上角\"启用手动选择功能\"是总开关，不开启时勾选不生效。"),
-                new HelpLine(0, "  • 总开关未开启时勾选并保存，程序会主动询问是否立即启用，避免误以为已生效。"),
-                new HelpLine(0, "  • 启用后，定时轮换与\"下一张\"只从勾选的壁纸里挑（未勾选的不参与切换）；随机顺序开关不受影响。"),
+                new HelpLine(0, "  • 点击\"手动壁纸选择\"打开勾选窗口；勾选壁纸即开启手动模式，全部取消勾选即关闭。"),
+                new HelpLine(0, "  • 只要勾选了壁纸，定时轮换与\"下一张\"就只从勾选的壁纸里挑（未勾选的不参与切换）；随机顺序开关不受影响。"),
                 new HelpLine(0, "  • 顶部输入框可按文件名筛选，\"全选 / 全不选 / 反选\"只作用于当前筛选出的图片。"),
-                new HelpLine(0, "  • 勾选集合与总开关都保存在配置里，重启后保持；之后新增的图片默认未勾选。"),
+                new HelpLine(0, "  • 勾选集合保存在配置里，重启后保持；之后新增的图片默认未勾选。"),
                 new HelpLine(0, "  • \"上一张\"属于历史回退、不受勾选限制；修改后请点窗口右下角\"保存\"才会生效。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 支持的图片格式"),
@@ -423,11 +410,10 @@ namespace WallpaperChanger
                 new HelpLine(0, "  • \"Previous\" steps back repeatedly, as far as the wallpaper shown when the program started."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ Manual wallpaper selection"),
-                new HelpLine(0, "  • Click \"Manual wallpaper selection\" to open the picker; the \"Enable manual selection\" checkbox in its top-left corner is the master switch - checks have no effect while it is off."),
-                new HelpLine(0, "  • If you save checks while the master switch is off, the app asks whether to enable it right away, so nothing is silently ignored."),
-                new HelpLine(0, "  • While enabled, timed rotation and \"Next\" draw only from the checked wallpapers; the random-order option keeps working."),
+                new HelpLine(0, "  • Click \"Manual wallpaper selection\" to open the picker; checking any wallpaper turns manual mode on, unchecking all of them turns it off."),
+                new HelpLine(0, "  • As long as at least one wallpaper is checked, timed rotation and \"Next\" draw only from the checked set; the random-order option keeps working."),
                 new HelpLine(0, "  • The top input box filters by file name; \"All / None / Invert\" affect only the currently filtered images."),
-                new HelpLine(0, "  • The checked set and the master switch persist in the config; newly added images start unchecked."),
+                new HelpLine(0, "  • The checked set persists in the config; newly added images start unchecked."),
                 new HelpLine(0, "  • \"Previous\" is a history walk and ignores the checked set; click \"Save\" in the picker to apply changes."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ Supported image formats"),
@@ -463,11 +449,10 @@ namespace WallpaperChanger
                 new HelpLine(0, "  • 「前の壁紙」は連続して戻れます。起動時に表示されていた壁紙まで戻れます。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 手動壁紙選択"),
-                new HelpLine(0, "  • 「手動壁紙選択」で選択ウィンドウを開きます。左上の「手動選択機能を有効化」がマスタースイッチで、オフの間はチェックが反映されません。"),
-                new HelpLine(0, "  • マスタースイッチがオフのままチェックして保存すると、すぐ有効にするか確認されます。気づかずに保存されることはありません。"),
-                new HelpLine(0, "  • 有効にすると、定時ローテーションと「次の壁紙」はチェック済みの壁紙のみから選ばれます。ランダム順序の設定はそのまま動作します。"),
+                new HelpLine(0, "  • 「手動壁紙選択」で選択ウィンドウを開きます。壁紙をチェックすると手動モードが有効になり、すべて解除すると無効になります。"),
+                new HelpLine(0, "  • 1 枚でもチェックされていれば、定時ローテーションと「次の壁紙」はチェック済みの壁紙のみから選ばれます。ランダム順序の設定はそのまま動作します。"),
                 new HelpLine(0, "  • 上部の入力欄でファイル名を絞り込めます。「全選択 / 全解除 / 反転」は現在絞り込まれた画像にのみ作用します。"),
-                new HelpLine(0, "  • チェック内容とマスタースイッチは設定に保存され、再起動後も保持されます。追加した画像は既定で未チェックです。"),
+                new HelpLine(0, "  • チェック内容は設定に保存され、再起動後も保持されます。追加した画像は既定で未チェックです。"),
                 new HelpLine(0, "  • 「前の壁紙」は履歴をたどるもので、チェックの対象外です。変更は右下の「保存」で反映されます。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 対応画像形式"),

@@ -71,11 +71,12 @@ namespace WallpaperChanger
         // yet" - the app then detects from the OS UI language on first run.
         public static string Language = "";
 
-        // Manual wallpaper picker: master switch plus the checked file set.
-        // When ManualSelectionEnabled is on, every forward switch (manual next,
+        // Manual wallpaper picker: the checked file set alone decides the mode.
+        // When ManualPicked is non-empty, every forward switch (manual next,
         // auto timer) draws from scanned images that are also in ManualPicked;
         // the random/order mode keeps working on that smaller pool unchanged.
-        public static bool ManualSelectionEnabled = false;
+        // No master switch: checking at least one wallpaper turns the feature
+        // on, unchecking all of them turns it off.
         public static List<string> ManualPicked = new List<string>();
 
         private static string ConfigPath
@@ -137,7 +138,11 @@ namespace WallpaperChanger
                     v = v.Trim().ToLowerInvariant();
                     if (v == "zh" || v == "en" || v == "ja") Language = v;
                 }
-                if (single.TryGetValue("manual_enabled", out v)) ManualSelectionEnabled = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+                if (single.TryGetValue("manual_enabled", out v))
+                {
+                    // Legacy: older configs used a master switch. It is ignored
+                    // now that the checked set alone drives the mode.
+                }
                 if (single.TryGetValue("hotkey", out v))
                 {
                     int n;
@@ -167,7 +172,6 @@ namespace WallpaperChanger
                 {
                     sb.AppendLine("folder=" + folder);
                 }
-                sb.AppendLine("manual_enabled=" + (ManualSelectionEnabled ? "1" : "0"));
                 foreach (string picked in ManualPicked)
                 {
                     sb.AppendLine("picked=" + picked);

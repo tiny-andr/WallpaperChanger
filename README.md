@@ -16,7 +16,7 @@ Built with C# / .NET 8 (WinForms), no runtime dependencies. Designed for Windows
 - **Global hotkeys** (main keyboard **and** numpad):
   - `Ctrl+9` — next wallpaper
   - `Ctrl+8` — previous wallpaper (steps back through the history of this session; a following `Ctrl+9` returns to the wallpaper you stepped away from)
-- **Manual wallpaper picker** — curate exactly which wallpapers rotate: open the picker (button under the source list or tray menu), tick the tiles you like in the 16:9 grid (live file-name filter plus 全选 / 全不选 / 反选 acting on the filtered set), flip the master switch and hit save. While active, auto rotation and "next" only draw from the checked set; random / order modes keep working on that smaller pool. Selections and the switch persist across restarts; newly added images default to unchecked, and "previous" remains a pure history walk.
+- **Manual wallpaper picker** — curate exactly which wallpapers rotate: open the picker (button under the source list or tray menu), tick the tiles you like in the 16:9 grid (live file-name filter plus 全选 / 全不选 / 反选 acting on the filtered set) and hit save. Checking any wallpaper turns manual mode on; unchecking all of them turns it off. While active, auto rotation and "next" only draw from the checked set; random / order modes keep working on that smaller pool. Selections persist across restarts; newly added images default to unchecked, and "previous" remains a pure history walk.
 - **Tray resident** — right-click the tray icon for pause / next / previous / manual picker / exit; closing the window just minimizes to tray
 - **Auto start with Windows** (optional)
 - **Supported formats** — jpg / png / jfif / bmp / webp / gif / tiff; `Thumbs.db` and corrupt images are skipped automatically

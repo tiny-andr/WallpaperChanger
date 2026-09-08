@@ -20,8 +20,6 @@ namespace WallpaperChanger
         private static readonly Color Accent = Color.FromArgb(24, 95, 165);
 
         private readonly Form ownerForm;
-        private CheckBox chkMaster;
-        private Label lblMasterHint;
         private Button btnAll;
         private Button btnNone;
         private Button btnInvert;
@@ -41,7 +39,6 @@ namespace WallpaperChanger
         private bool scanFinished;
         private bool closing;
         private bool dirty;
-        private bool loadingInitial = true;
         private string savedMessage;
         private float sf = 1f;
 
@@ -67,40 +64,26 @@ namespace WallpaperChanger
 
         private void BuildChrome()
         {
-            chkMaster = new CheckBox();
-            chkMaster.Text = Loc.T("picker.master");
-            chkMaster.Font = new Font(Font, FontStyle.Bold);
-            chkMaster.SetBounds(16, 12, 220, 26);
-            chkMaster.CheckedChanged += delegate { if (!loadingInitial) dirty = true; UpdateMasterHint(); };
-            Controls.Add(chkMaster);
-
-            lblMasterHint = new Label();
-            lblMasterHint.Text = "";
-            lblMasterHint.AutoSize = true;
-            lblMasterHint.SetBounds(244, 15, 10, 10);
-            lblMasterHint.ForeColor = Color.FromArgb(96, 96, 96);
-            Controls.Add(lblMasterHint);
-
             btnAll = new Button();
             btnAll.Text = Loc.T("picker.all");
-            btnAll.SetBounds(0, 48, 66, 28);
+            btnAll.SetBounds(0, 12, 66, 28);
             btnAll.Click += delegate { BulkToggle(BulkKind.All); };
             Controls.Add(btnAll);
 
             btnNone = new Button();
             btnNone.Text = Loc.T("picker.none");
-            btnNone.SetBounds(0, 48, 66, 28);
+            btnNone.SetBounds(0, 12, 66, 28);
             btnNone.Click += delegate { BulkToggle(BulkKind.None); };
             Controls.Add(btnNone);
 
             btnInvert = new Button();
             btnInvert.Text = Loc.T("picker.invert");
-            btnInvert.SetBounds(0, 48, 66, 28);
+            btnInvert.SetBounds(0, 12, 66, 28);
             btnInvert.Click += delegate { BulkToggle(BulkKind.Invert); };
             Controls.Add(btnInvert);
 
             txtFilter = new TextBox();
-            txtFilter.SetBounds(0, 48, 300, 28);
+            txtFilter.SetBounds(0, 12, 300, 28);
             txtFilter.TextChanged += delegate { OnFilterChanged(); };
             txtFilter.Enter += delegate { UpdatePlaceholder(); };
             txtFilter.Leave += delegate { UpdatePlaceholder(); };
@@ -110,7 +93,7 @@ namespace WallpaperChanger
             lblPlaceholder.Text = Loc.T("picker.filter.hint");
             lblPlaceholder.ForeColor = Color.Gray;
             lblPlaceholder.AutoSize = false;
-            lblPlaceholder.SetBounds(0, 51, 280, 22);
+            lblPlaceholder.SetBounds(0, 15, 280, 22);
             lblPlaceholder.Click += delegate { txtFilter.Focus(); };
             Controls.Add(lblPlaceholder);
 
@@ -119,7 +102,7 @@ namespace WallpaperChanger
             lblCount.AutoSize = false;
             lblCount.TextAlign = ContentAlignment.MiddleRight;
             lblCount.ForeColor = Accent;
-            lblCount.SetBounds(0, 48, 150, 26);
+            lblCount.SetBounds(0, 12, 150, 26);
             Controls.Add(lblCount);
 
             canvas = new PickerCanvas();
@@ -189,11 +172,6 @@ namespace WallpaperChanger
             if (h < minH) h = Math.Min(minH, wa.Height - 24);
             Size = new Size(w, h);
             Location = new Point(wa.X + (wa.Width - w) / 2, wa.Y + (wa.Height - h) / 2);
-
-            loadingInitial = true;
-            chkMaster.Checked = Config.ManualSelectionEnabled;
-            loadingInitial = false;
-            UpdateMasterHint();
 
             LayoutChrome();
             UpdateHint();
@@ -384,32 +362,6 @@ namespace WallpaperChanger
 
         private void Save()
         {
-            int pickedCount = CountPicked();
-
-            // Classic trap: the user checks wallpapers but never flips the
-            // master switch, saves, and walks away believing manual mode is
-            // running. Ask directly instead of silently keeping it off.
-            // Cancel aborts so nothing is written under a misunderstanding.
-            if (!chkMaster.Checked && pickedCount > 0)
-            {
-                DialogResult r = MessageBox.Show(this,
-                    Loc.F("picker.enable.prompt", pickedCount),
-                    Loc.T("picker.caption"),
-                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                if (r == DialogResult.Cancel) return;
-                if (r == DialogResult.Yes) chkMaster.Checked = true;
-            }
-
-            if (chkMaster.Checked && pickedCount == 0)
-            {
-                // Master on with no picks leaves no pool to switch from. The
-                // old modal loop made every close attempt re-popup; instead,
-                // turn the master off automatically and save the (empty)
-                // selection so the close path always succeeds in one click.
-                chkMaster.Checked = false;
-            }
-
-            Config.ManualSelectionEnabled = chkMaster.Checked;
             List<string> picks = new List<string>();
             foreach (string p in allPaths)
             {
@@ -418,20 +370,12 @@ namespace WallpaperChanger
             Config.ManualPicked = picks;
             Config.Save();
             dirty = false;
-            savedMessage = chkMaster.Checked
+            // The checked set alone drives the mode: non-empty = manual on,
+            // empty = manual off. No master switch, no enable prompt.
+            savedMessage = picks.Count > 0
                 ? Loc.F("picker.saved.on", picks.Count)
-                : Loc.F("picker.saved.off", picks.Count);
+                : Loc.T("picker.saved.off");
             UpdateHint();
-        }
-
-        private int CountPicked()
-        {
-            int n = 0;
-            foreach (string p in allPaths)
-            {
-                if (picked.Contains(Normalize(p))) n++;
-            }
-            return n;
         }
 
         // The 关闭 button. This runs from a Click handler, so calling Close()
@@ -470,24 +414,6 @@ namespace WallpaperChanger
                 return;
             }
             base.OnFormClosing(e);
-        }
-
-        // Master-switch status line: warm warning color while OFF so the
-        // gate is impossible to miss, calm green once it is enabled. The
-        // text also states plainly what the current state means.
-        private void UpdateMasterHint()
-        {
-            if (lblMasterHint == null || chkMaster == null) return;
-            if (chkMaster.Checked)
-            {
-                lblMasterHint.Text = Loc.T("picker.master.hint.on");
-                lblMasterHint.ForeColor = Color.FromArgb(0, 110, 60);
-            }
-            else
-            {
-                lblMasterHint.Text = Loc.T("picker.master.hint.off");
-                lblMasterHint.ForeColor = Color.FromArgb(196, 88, 0);
-            }
         }
 
         private void UpdateHint()
