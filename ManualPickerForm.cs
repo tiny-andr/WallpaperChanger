@@ -51,8 +51,13 @@ namespace WallpaperChanger
             MinimizeBox = true;
             ShowInTaskbar = true;
             StartPosition = FormStartPosition.Manual;   // centered on the owner's screen in OnLoad
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Same DPI rule as MainForm: the design basis (96 DPI) must be
+            // assigned AFTER AutoScaleMode, because that setter resets
+            // AutoScaleDimensions to the current device DPI. Otherwise the
+            // window is laid out against a wrong basis and everything shrinks
+            // or clips once it lands on a monitor with a different scaling.
             AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = SystemColors.Control;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); }

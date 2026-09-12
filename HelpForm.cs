@@ -20,8 +20,12 @@ namespace WallpaperChanger
             MinimizeBox = false;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.CenterParent;
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // Same DPI rule as MainForm: pin the 96-DPI design basis AFTER the
+            // mode, because the AutoScaleMode setter resets AutoScaleDimensions
+            // to the current device DPI (which shrank every window to 2/3 of
+            // its designed size on this machine).
             AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
             ClientSize = new Size(470, 460);
             Font = new Font("Microsoft YaHei UI", 9F);
 

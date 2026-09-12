@@ -77,10 +77,11 @@ namespace WallpaperChanger
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             // High-DPI support: declare the 96 DPI design basis and let
-            // WinForms scale the whole layout (controls + font) proportionally
-            // on any monitor, so 100% and 150% screens look identical.
-            AutoScaleDimensions = new SizeF(96F, 96F);
+            // WinForms scale the whole layout proportionally on any monitor.
+            // Order matters: the AutoScaleMode setter resets AutoScaleDimensions,
+            // so the design basis must be assigned AFTER the mode.
             AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
             ClientSize = new Size(480, 560);
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = SystemColors.Control;
@@ -1064,6 +1065,8 @@ namespace WallpaperChanger
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
+            Log.Write("ui: dpi=" + DeviceDpi + " scale=" + (DeviceDpi / 96f).ToString("0.00")
+                + " client=" + ClientSize.Width + "x" + ClientSize.Height);
             if (hotkeyManager != null) ApplyHotkey();
         }
 
