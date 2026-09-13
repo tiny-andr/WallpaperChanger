@@ -40,8 +40,10 @@ namespace WallpaperChanger
     //     holds ~35 tiles, whatever the library size is). Each tile is a 1:1
     //     blit from the thumbnail cache when ready, or a placeholder when the
     //     decode is still running.
-    //   - Thumbnails decode in the background (SemaphoreSlim=4) keyed by the
-    //     file path, so scrolling, filtering and re-layout reuse them.
+    //   - Thumbnails decode in the background (at most 4 at a time) keyed by
+    //     the file path, so scrolling, filtering and re-layout reuse them.
+    //     Queue bookkeeping stays on the UI thread; workers only hand the
+    //     finished bitmap back through Invoke.
     //   - Scrolling / resizing only Invalidate() and repaint the viewport.
     //     Layout recomputation on resize is debounced so dragging the window
     //     never triggers work in a tight loop.
@@ -54,6 +56,7 @@ namespace WallpaperChanger
         private const int DesignCellW = 258;
         private const int DesignCellImgH = 145;
         private const int DesignSpacing = 8;
+        private const int MaxConcurrentDecodes = 4;
 
         private readonly List<string> paths = new List<string>();
         private readonly HashSet<int> picked = new HashSet<int>();
@@ -61,7 +64,11 @@ namespace WallpaperChanger
             new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
         private readonly Queue<string> decodeQueue = new Queue<string>();
         private readonly HashSet<string> decoding = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        private readonly SemaphoreSlim decodeGate = new SemaphoreSlim(4);
+
+        // The whole decode pipeline (decodeQueue / decoding / the pump) runs on
+        // the UI thread only; workers just hand finished thumbnails back. The
+        // flag keeps a burst of completions from queueing overlapping pumps.
+        private bool pumpQueued;
         private readonly System.Windows.Forms.Timer relayoutTimer;
         private Font labelFont;
         private Font placeholderFont;
@@ -134,6 +141,7 @@ namespace WallpaperChanger
             }
             Relayout(true);
             PrimeDecodeQueue();
+            DispatchDecoder();
         }
 
         // Bulk replacement of the picked set (全选/全不选/反选 or toggle from
@@ -204,8 +212,13 @@ namespace WallpaperChanger
             AutoScrollMinSize = new Size(contentW, contentH);
             if (forceResetScroll) AutoScrollPosition = new Point(0, 0);
             Invalidate();
+            // Queued items survive a relayout; make sure a drain is coming.
+            DispatchDecoder();
         }
 
+        // Refill the queue with everything not already cached or in flight.
+        // Callers follow up with DispatchDecoder(); this method itself only
+        // touches queue state and must run on the UI thread.
         private void PrimeDecodeQueue()
         {
             if (paths.Count == 0) return;
@@ -225,12 +238,26 @@ namespace WallpaperChanger
                 if (!thumbCache.ContainsKey(p) && !decoding.Contains(p))
                     decodeQueue.Enqueue(p);
             }
-            PumpDecoder();
         }
 
+        // Ask for a drain. Safe from any thread: the marshal hop makes the
+        // actual work run on the UI thread, which is the only owner of
+        // decodeQueue / decoding.
+        private void DispatchDecoder()
+        {
+            if (pumpQueued) return;
+            pumpQueued = true;
+            SafeUi(PumpDecoder);
+        }
+
+        // Drain the queue on the UI thread. Every mutation of decodeQueue and
+        // decoding happens here, so no locking is needed. Each job is handed
+        // to a worker that only decodes and posts the result back.
         private void PumpDecoder()
         {
-            while (decoding.Count < 4 && decodeQueue.Count > 0)
+            pumpQueued = false;
+            if (IsDisposed || Disposing) return;
+            while (decoding.Count < MaxConcurrentDecodes && decodeQueue.Count > 0)
             {
                 string path = decodeQueue.Dequeue();
                 if (thumbCache.ContainsKey(path) || decoding.Contains(path)) continue;
@@ -239,29 +266,38 @@ namespace WallpaperChanger
                 int h = cellImgH;
                 Task.Run(delegate
                 {
-                    Bitmap cached = ThumbCache.Get(path, w, h);
-                    if (cached != null)
+                    Bitmap result = null;
+                    try
                     {
-                        decoding.Remove(path);
-                        SafeUi(delegate { SetThumb(path, cached); });
-                        SafeUi(PumpDecoder);
-                        return;
+                        result = ThumbCache.Get(path, w, h);
+                        if (result == null)
+                        {
+                            ThumbCache.Generate(path, w, h);
+                            result = ThumbCache.Get(path, w, h);
+                        }
                     }
-
-                    ThumbCache.Generate(path, w, h);
-                    cached = ThumbCache.Get(path, w, h);
-                    decoding.Remove(path);
-                    if (cached != null)
+                    catch
                     {
-                        SafeUi(delegate { SetThumb(path, cached); });
+                        result = null;
                     }
-                    else
+                    Bitmap done = result;
+                    SafeUi(delegate
                     {
-                        SafeUi(delegate { thumbCache[path] = null; });
-                    }
-                    SafeUi(PumpDecoder);
+                        OnDecodeFinished(path, done);
+                        PumpDecoder();
+                    });
                 });
             }
+        }
+
+        // Runs on the UI thread once a worker returns. A null bitmap means the
+        // file could not be decoded; remembering it stops that path from being
+        // queued again on every scroll.
+        private void OnDecodeFinished(string path, Bitmap bmp)
+        {
+            decoding.Remove(path);
+            if (bmp != null) SetThumb(path, bmp);
+            else thumbCache[path] = null;
         }
 
         private int VisibleRowStart()
@@ -569,6 +605,8 @@ namespace WallpaperChanger
             if (disposing)
             {
                 relayoutTimer.Dispose();
+                decodeQueue.Clear();
+                decoding.Clear();
                 foreach (Bitmap b in thumbCache.Values)
                 {
                     if (b != null) b.Dispose();
