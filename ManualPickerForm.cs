@@ -31,7 +31,7 @@ namespace WallpaperChanger
         private PickerCanvas canvas;
         private Label lblGridInfo;
         private Label lblBottomHint;
-        private Button btnClose;
+        private Button btnDisableAll;
         private Button btnSave;
         private ToolTip toolTip;
 
@@ -79,7 +79,7 @@ namespace WallpaperChanger
             catch { }
 
             BuildChrome();
-            CancelButton = btnClose;
+            CancelButton = btnSave;
         }
 
         private void BuildChrome()
@@ -165,21 +165,23 @@ namespace WallpaperChanger
             lblBottomHint.SetBounds(16, 0, 600, 22);
             Controls.Add(lblBottomHint);
 
+            // Save and close in one step: normal flow is "curate, then leave".
             btnSave = new Button();
-            btnSave.Text = Loc.T("picker.save");
+            btnSave.Text = Loc.T("picker.saveclose");
             btnSave.FlatStyle = FlatStyle.Flat;
             btnSave.FlatAppearance.BorderSize = 0;
             btnSave.BackColor = Accent;
             btnSave.ForeColor = Color.White;
-            btnSave.SetBounds(0, 0, 96, 34);
-            btnSave.Click += delegate { Save(); };
+            btnSave.SetBounds(0, 0, 108, 34);
+            btnSave.Click += delegate { SaveAndClose(); };
             Controls.Add(btnSave);
 
-            btnClose = new Button();
-            btnClose.Text = Loc.T("picker.close");
-            btnClose.SetBounds(0, 0, 96, 34);
-            btnClose.Click += delegate { RequestClose(); };
-            Controls.Add(btnClose);
+            // Escape hatch: drop every check and leave manual mode entirely.
+            btnDisableAll = new Button();
+            btnDisableAll.Text = Loc.T("picker.disableall");
+            btnDisableAll.SetBounds(0, 0, 150, 34);
+            btnDisableAll.Click += delegate { DisableManualSelection(); };
+            Controls.Add(btnDisableAll);
 
             toolTip = new ToolTip();
             toolTip.AutoPopDelay = 6000;
@@ -311,12 +313,15 @@ namespace WallpaperChanger
                 canvas.Width - (int)(60 * sf), (int)(60 * sf));
             lblGridInfo.Font = Font;
 
-            btnSave.Location = new Point(right - btnSave.Width,
-                ClientSize.Height - btnSave.Height - (int)(10 * sf));
-            btnClose.Location = new Point(btnSave.Left - btnClose.Width - (int)(10 * sf),
-                btnSave.Top);
+            // Bottom bar, right to left: 保存并关闭, then 彻底关闭手动选择壁纸
+            // to its left. The hint label only gets the leftover space.
+            int barTop = ClientSize.Height - btnSave.Height - (int)(10 * sf);
+            btnSave.Location = new Point(right - btnSave.Width, barTop);
+            btnDisableAll.Location = new Point(btnSave.Left - btnDisableAll.Width - (int)(10 * sf), barTop);
+            if (btnDisableAll.Left < (int)(14 * sf))
+                btnDisableAll.Left = (int)(14 * sf);
             lblBottomHint.SetBounds((int)(16 * sf), btnSave.Top + (int)(4 * sf),
-                Math.Max(100, btnClose.Left - (int)(16 * sf) - (int)(26 * sf)), 22);
+                Math.Max(100, btnDisableAll.Left - (int)(16 * sf) - (int)(10 * sf)), 22);
         }
 
         private void StartScan()
@@ -604,13 +609,39 @@ namespace WallpaperChanger
             UpdateHint();
         }
 
-        // The 关闭 button. This runs from a Click handler, so calling Close()
-        // here is a top-level call (NOT inside OnFormClosing) and is safe.
-        private void RequestClose()
+        // The 保存并关闭 button: persist the checked set, then leave. No extra
+        // "unsaved changes" prompt, since the user just asked to save.
+        private void SaveAndClose()
         {
-            if (!ConfirmCloseAllowed()) return;
+            Save();
             closing = true;
             Close();
+        }
+
+        // 彻底关闭手动选择壁纸: drop every check, persist immediately, confirm,
+        // then close both this window and the confirmation box.
+        private void DisableManualSelection()
+        {
+            DialogResult r = MessageBox.Show(this,
+                Loc.T("picker.disableall.confirm"),
+                Loc.T("picker.caption"), MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (r != DialogResult.OK) return;
+
+            ClearAndSave();
+            closing = true;
+            Close();
+        }
+
+        // The state change behind 彻底关闭手动选择壁纸, split out so tests can
+        // exercise it without a modal confirmation box.
+        private void ClearAndSaveForTest() { ClearAndSave(); }
+
+        private void ClearAndSave()
+        {
+            picked.Clear();
+            if (canvas != null) canvas.ClearSelection();
+            Save();                 // Config.ManualPicked = empty + write to disk
+            savedMessage = Loc.T("picker.saved.off");
         }
 
         // Ask once per close attempt whether unsaved picks should be saved.

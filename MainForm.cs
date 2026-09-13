@@ -164,7 +164,8 @@ namespace WallpaperChanger
             gbSource.Controls.Add(lblSourceSummary);
 
             // Manual wallpaper picker: opens the selection dialog where the
-            // user curates which wallpapers participate in switching.
+            // user curates which wallpapers participate in switching. The
+            // caption doubles as the state readout (off / N selected).
             btnManualPick = new Button();
             btnManualPick.SetBounds(12, 186, 456, 32);
             btnManualPick.Click += delegate { OpenManualPicker(); };
@@ -293,7 +294,7 @@ namespace WallpaperChanger
         {
             gbSource.Text = Loc.T("main.source.group");
             btnSources.Text = Loc.T("main.source.manage");
-            btnManualPick.Text = Loc.T("main.manual.btn");
+            RefreshManualPickText();
             gbSettings.Text = Loc.T("main.settings.group");
             lblStyle.Text = Loc.T("main.settings.style");
             lblInterval.Text = Loc.T("main.settings.interval");
@@ -441,8 +442,20 @@ namespace WallpaperChanger
             if (!hadValid && HasValidFolders()) NextWallpaper();
         }
 
-        // Two-line summary under the manager button: how many sources exist,
-        // how many are enabled, and which ones are currently disabled.
+        // The picker button shows the live manual-selection state, so the mode
+        // is visible without opening the dialog.
+        private void RefreshManualPickText()
+        {
+            if (btnManualPick == null) return;
+            int n = Config.ManualPicked.Count;
+            btnManualPick.Text = n > 0
+                ? Loc.F("main.manual.btn.on", n)
+                : Loc.T("main.manual.btn");
+        }
+
+        // Summary under the manager button: how many sources exist and how many
+        // are enabled. Which ones are disabled is deliberately not listed here;
+        // the manager dialog shows that per row.
         private void RefreshSourceSummary()
         {
             if (lblSourceSummary == null) return;
@@ -452,17 +465,14 @@ namespace WallpaperChanger
                 lblSourceSummary.Text = Loc.T("main.source.summary.none");
                 return;
             }
-            List<string> off = new List<string>();
+            int off = 0;
             foreach (string f in Config.Folders)
             {
-                if (!Config.IsSourceEnabled(f)) off.Add(SourceName(f));
+                if (!Config.IsSourceEnabled(f)) off++;
             }
-            string head = Loc.F("main.source.summary", total, total - off.Count, off.Count);
-            if (off.Count == 0)
+            string head = Loc.F("main.source.summary", total, total - off, off);
+            if (off == 0)
                 head += "\r\n" + Loc.T("main.source.all.on");
-            else
-                head += "\r\n" + Loc.F("main.source.off.list",
-                    string.Join(Loc.T("main.source.off.sep"), off.ToArray()));
             lblSourceSummary.Text = head;
         }
 
@@ -599,6 +609,7 @@ namespace WallpaperChanger
                 dlg.ShowDialog(this);
             }
             bool nowOn = Config.ManualPicked.Count > 0;
+            RefreshManualPickText();
             if (wasOn != nowOn)
             {
                 RefreshStatusLine();

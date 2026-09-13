@@ -163,6 +163,16 @@ namespace WallpaperChanger
             Invalidate(flipped);
         }
 
+        // Uncheck every tile at once (used by "彻底关闭手动选择壁纸").
+        public void ClearSelection()
+        {
+            if (picked.Count == 0) return;
+            picked.Clear();
+            Invalidate();
+        }
+
+        public int PickedCount { get { return picked.Count; } }
+
         // Push one freshly decoded thumbnail. Ownership transfers to the
         // cache. The affected tile is repainted if it is on screen.
         public void SetThumb(string path, Bitmap bmp)
