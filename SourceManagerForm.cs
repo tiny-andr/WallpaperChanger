@@ -242,15 +242,7 @@ namespace WallpaperChanger
 
         private static string SourceName(string folder)
         {
-            try
-            {
-                string n = Path.GetFileName(folder.TrimEnd('\\', '/'));
-                if (!string.IsNullOrEmpty(n)) return n;
-            }
-            catch
-            {
-            }
-            return folder;
+            return SourceNames.Display(folder);
         }
 
         private string CountText(string folder)

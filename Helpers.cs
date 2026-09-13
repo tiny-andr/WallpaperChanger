@@ -65,6 +65,26 @@ namespace WallpaperChanger
         }
     }
 
+    // Friendly name for a wallpaper source folder: its last path segment
+    // ("D:\Walls\Nature" -> "Nature"), falling back to the full path for
+    // drive roots and the like.
+    public static class SourceNames
+    {
+        public static string Display(string folder)
+        {
+            if (string.IsNullOrEmpty(folder)) return "";
+            try
+            {
+                string n = Path.GetFileName(folder.TrimEnd('\\', '/'));
+                if (!string.IsNullOrEmpty(n)) return n;
+            }
+            catch
+            {
+            }
+            return folder;
+        }
+    }
+
     // Append-only log (same adaptive location as the config); failures are
     // silently ignored.
     public static class Log

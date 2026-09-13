@@ -23,6 +23,8 @@ namespace WallpaperChanger
         private Button btnAll;
         private Button btnNone;
         private Button btnInvert;
+        private Label lblSource;
+        private ComboBox cmbSource;
         private TextBox txtFilter;
         private Label lblPlaceholder;
         private Label lblCount;
@@ -36,11 +38,24 @@ namespace WallpaperChanger
         private readonly List<string> allPaths = new List<string>();
         private readonly HashSet<string> picked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Per-source split of the scan so the source filter can show a single
+        // source at a time. ownerOf maps a normalized path to the index of the
+        // source that contributed it (first source wins, exactly like the
+        // dedupe in ImageScanner.ScanMany).
+        private readonly List<string> sourceFolders = new List<string>();
+        private readonly Dictionary<string, int> ownerOf = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        private int[] sourceCounts = new int[0];
+        private SrcFilter srcMode = SrcFilter.All;
+        private int srcIndex = -1;
+        private bool comboUpdating;
+
         private bool scanFinished;
         private bool closing;
         private bool dirty;
         private string savedMessage;
         private float sf = 1f;
+
+        private enum SrcFilter { All, Picked, One }
 
         public ManualPickerForm(Form owner)
         {
@@ -69,6 +84,23 @@ namespace WallpaperChanger
 
         private void BuildChrome()
         {
+            // Source filter. Hidden by default: it only earns its row when the
+            // picker draws from more than one source.
+            lblSource = new Label();
+            lblSource.Text = Loc.T("picker.src.label");
+            lblSource.AutoSize = true;
+            lblSource.TextAlign = ContentAlignment.MiddleLeft;
+            lblSource.SetBounds(14, 16, 60, 22);
+            lblSource.Visible = false;
+            Controls.Add(lblSource);
+
+            cmbSource = new ComboBox();
+            cmbSource.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbSource.SetBounds(80, 12, 260, 26);
+            cmbSource.Visible = false;
+            cmbSource.SelectedIndexChanged += delegate { OnSourceFilterChanged(); };
+            Controls.Add(cmbSource);
+
             btnAll = new Button();
             btnAll.Text = Loc.T("picker.all");
             btnAll.SetBounds(0, 12, 66, 28);
@@ -195,6 +227,18 @@ namespace WallpaperChanger
             int right = ClientSize.Width - (int)(14 * sf);
             int gap = (int)(10 * sf);
 
+            // With the source filter present the button row moves down one
+            // line; everything else follows off btnAll.Top.
+            bool srcRow = cmbSource != null && cmbSource.Visible;
+            int rowTop = srcRow ? (int)(46 * sf) : (int)(12 * sf);
+            if (srcRow)
+            {
+                lblSource.Location = new Point((int)(14 * sf), rowTop + (int)(5 * sf));
+                cmbSource.Location = new Point(lblSource.Right + (int)(6 * sf), rowTop);
+                cmbSource.Width = Math.Max((int)(200 * sf), right - cmbSource.Left);
+            }
+            btnAll.Top = rowTop;
+
             lblCount.Location = new Point(right - lblCount.Width, btnAll.Top);
             txtFilter.Width = Math.Max(220, (int)(300 * sf));
             txtFilter.Location = new Point(lblCount.Left - txtFilter.Width - gap, btnAll.Top);
@@ -231,15 +275,45 @@ namespace WallpaperChanger
             ShowGridInfo(Loc.T("picker.scanning"));
             Task.Run(delegate
             {
-                List<string> found = ImageScanner.ScanMany(folders, recursive);
-                SafeUi(delegate { OnScanDone(found); });
+                // Scan each source on its own so the source filter can show one
+                // of them later, then merge exactly the way ScanMany would:
+                // first source wins a duplicate, natural-sorted result.
+                List<string> merged = new List<string>();
+                Dictionary<string, int> owner = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                for (int i = 0; i < folders.Count; i++)
+                {
+                    foreach (string p in ImageScanner.Scan(folders[i], recursive))
+                    {
+                        string norm = Normalize(p);
+                        if (seen.Add(norm))
+                        {
+                            merged.Add(p);
+                            owner[norm] = i;
+                        }
+                    }
+                }
+                merged.Sort(delegate (string a, string b) { return ImageScanner.NaturalCompare(a, b); });
+                SafeUi(delegate { OnScanDone(merged, folders, owner); });
             });
         }
 
-        private void OnScanDone(List<string> found)
+        private void OnScanDone(List<string> found, List<string> folders, Dictionary<string, int> owner)
         {
             allPaths.Clear();
             allPaths.AddRange(found);
+
+            sourceFolders.Clear();
+            sourceFolders.AddRange(folders);
+            ownerOf.Clear();
+            foreach (KeyValuePair<string, int> kv in owner) ownerOf[kv.Key] = kv.Value;
+            sourceCounts = new int[sourceFolders.Count];
+            foreach (string p in allPaths)
+            {
+                int i;
+                if (ownerOf.TryGetValue(Normalize(p), out i) && i >= 0 && i < sourceCounts.Length)
+                    sourceCounts[i]++;
+            }
 
             picked.Clear();
             HashSet<string> saved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -254,18 +328,20 @@ namespace WallpaperChanger
             }
 
             scanFinished = true;
+            BuildSourceCombo();
+            LayoutChrome();
             UpdateCountText();
             if (allPaths.Count == 0)
             {
                 ShowGridInfo(Loc.T("picker.nofolders"));
                 return;
             }
-            ShowGridInfo("");
-            RefreshCanvas();
+            RefreshView();
         }
 
-        // Push the current filter subset + picked set into the canvas.
-        private void RefreshCanvas()
+        // Push the current view (source filter + name filter) into the canvas
+        // and explain an empty result.
+        private void RefreshView()
         {
             List<string> display = FilteredPaths();
             HashSet<int> displayPicked = new HashSet<int>();
@@ -274,17 +350,35 @@ namespace WallpaperChanger
                 if (picked.Contains(Normalize(display[i]))) displayPicked.Add(i);
             }
             canvas.SetWallpapers(display, displayPicked);
+
+            string msg = "";
+            if (display.Count == 0)
+            {
+                if (srcMode == SrcFilter.Picked) msg = Loc.T("picker.nosrcpick");
+                else if (currentFilter().Length > 0) msg = Loc.T("picker.nofiltermatch");
+            }
+            ShowGridInfo(msg);
+        }
+
+        private bool PassesSourceFilter(string path)
+        {
+            if (srcMode == SrcFilter.All) return true;
+            string norm = Normalize(path);
+            if (srcMode == SrcFilter.Picked) return picked.Contains(norm);
+            int i;
+            return ownerOf.TryGetValue(norm, out i) && i == srcIndex;
         }
 
         private List<string> FilteredPaths()
         {
             string f = currentFilter();
-            if (f.Length == 0) return new List<string>(allPaths);
             List<string> r = new List<string>();
             foreach (string p in allPaths)
             {
-                if (Path.GetFileName(p).IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0)
-                    r.Add(p);
+                if (!PassesSourceFilter(p)) continue;
+                if (f.Length > 0 &&
+                    Path.GetFileName(p).IndexOf(f, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                r.Add(p);
             }
             return r;
         }
@@ -304,10 +398,7 @@ namespace WallpaperChanger
         {
             UpdatePlaceholder();
             if (!scanFinished) return;
-            List<string> display = FilteredPaths();
-            RefreshCanvas();
-            ShowGridInfo(currentFilter().Length > 0 && display.Count == 0
-                ? Loc.T("picker.nofiltermatch") : "");
+            RefreshView();
         }
 
         private enum BulkKind { All, None, Invert }
@@ -350,15 +441,79 @@ namespace WallpaperChanger
             lblPlaceholder.Visible = txtFilter.Text.Trim().Length == 0 && !txtFilter.Focused;
         }
 
-        private void UpdateCountText()
+        private int PickedCount()
         {
-            if (lblCount == null) return;
             int n = 0;
             foreach (string p in allPaths)
             {
                 if (picked.Contains(Normalize(p))) n++;
             }
-            lblCount.Text = Loc.F("picker.count", n, allPaths.Count);
+            return n;
+        }
+
+        private void UpdateCountText()
+        {
+            if (lblCount == null) return;
+            lblCount.Text = Loc.F("picker.count", PickedCount(), allPaths.Count);
+            UpdatePickedComboLabel();
+        }
+
+        // Fill the source combo. It only appears when the picker draws from
+        // more than one source; with a single source there is nothing to
+        // narrow down. A returning user starts on the checked view, so the
+        // wallpapers picked last time are right there no matter which source
+        // they came from; a first run starts on "all wallpapers".
+        private void BuildSourceCombo()
+        {
+            if (cmbSource == null) return;
+            bool multi = sourceFolders.Count >= 2;
+            if (lblSource != null) lblSource.Visible = multi;
+            cmbSource.Visible = multi;
+            srcMode = SrcFilter.All;
+            srcIndex = -1;
+            if (!multi) return;
+
+            comboUpdating = true;
+            try
+            {
+                cmbSource.Items.Clear();
+                cmbSource.Items.Add(Loc.T("picker.src.all"));
+                cmbSource.Items.Add(Loc.F("picker.src.picked", PickedCount()));
+                for (int i = 0; i < sourceFolders.Count; i++)
+                {
+                    cmbSource.Items.Add(Loc.F("picker.src.one",
+                        SourceNames.Display(sourceFolders[i]), sourceCounts[i]));
+                }
+                int def = PickedCount() > 0 ? 1 : 0;
+                cmbSource.SelectedIndex = def;
+                if (def == 1) srcMode = SrcFilter.Picked;
+            }
+            finally
+            {
+                comboUpdating = false;
+            }
+        }
+
+        // Keep the "checked wallpapers (n)" entry in step with the live count
+        // without letting the update look like a user selection.
+        private void UpdatePickedComboLabel()
+        {
+            if (cmbSource == null || !cmbSource.Visible || cmbSource.Items.Count < 2) return;
+            string text = Loc.F("picker.src.picked", PickedCount());
+            if (string.Equals(cmbSource.Items[1] as string, text, StringComparison.Ordinal)) return;
+            comboUpdating = true;
+            try { cmbSource.Items[1] = text; }
+            finally { comboUpdating = false; }
+        }
+
+        private void OnSourceFilterChanged()
+        {
+            if (comboUpdating || !scanFinished || cmbSource == null) return;
+            int i = cmbSource.SelectedIndex;
+            if (i == 0) { srcMode = SrcFilter.All; srcIndex = -1; }
+            else if (i == 1) { srcMode = SrcFilter.Picked; srcIndex = -1; }
+            else { srcMode = SrcFilter.One; srcIndex = i - 2; }
+            RefreshView();
         }
 
         private void ShowGridInfo(string text)

@@ -72,6 +72,13 @@ namespace WallpaperChanger
             return merged;
         }
 
+        // The natural order ScanMany sorts by, exposed so callers that keep the
+        // per-source split can merge their parts exactly the same way.
+        public static int NaturalCompare(string a, string b)
+        {
+            return StrCmpLogicalW(a, b);
+        }
+
         // Cheap magic-byte check to drop corrupted / fake files without decoding.
         private static bool LooksLikeImage(string file, string ext)
         {
