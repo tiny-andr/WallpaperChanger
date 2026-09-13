@@ -96,9 +96,9 @@ namespace WallpaperChanger
                         return 2;
                     }
                 }
-                else if (Config.Folders != null && Config.Folders.Count > 0)
+                else if (Config.EnabledFolders().Count > 0)
                 {
-                    var imgs = ImageScanner.ScanMany(Config.Folders, Config.Recursive);
+                    var imgs = ImageScanner.ScanMany(Config.EnabledFolders(), Config.Recursive);
                     if (imgs.Count == 0) return 3;
                     path = imgs[new Random().Next(imgs.Count)];
                 }

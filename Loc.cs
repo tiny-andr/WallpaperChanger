@@ -100,10 +100,15 @@ namespace WallpaperChanger
             Dictionary<string, string> m = new Dictionary<string, string>();
             m["tray.tip"] = "WallpaperChanger - 壁纸轮换";
 
-            m["main.source.group"] = "壁纸源（通过按钮添加，不可手动输入）";
+            m["main.source.group"] = "壁纸源";
             m["main.source.add"] = "添加...";
             m["main.source.remove"] = "删除选中";
-            m["main.source.clear"] = "清空全部";
+            m["main.source.manage"] = "壁纸源管理…（添加 / 删除 / 启用或禁用）";
+            m["main.source.summary.none"] = "尚未添加壁纸源，点击上方按钮添加";
+            m["main.source.summary"] = "共 {0} 个源 · 启用 {1} · 禁用 {2}";
+            m["main.source.all.on"] = "所有壁纸源均已启用";
+            m["main.source.off.list"] = "已禁用：{0}";
+            m["main.source.off.sep"] = "、";
             m["main.manual.btn"] = "手动壁纸选择…（勾选后仅切换选中壁纸）";
             m["main.settings.group"] = "轮换设置";
             m["main.settings.style"] = "壁纸样式:";
@@ -169,6 +174,25 @@ namespace WallpaperChanger
             m["picker.bottom.hint"] = "未勾选的壁纸不参与自动 / 手动切换；随机顺序开关不受影响，仍在勾选池内打乱";
             m["picker.caption"] = "手动壁纸选择";
 
+            m["src.title"] = "壁纸源管理 - WallpaperChanger v{0}";
+            m["src.caption"] = "壁纸源管理";
+            m["src.col.state"] = "状态";
+            m["src.col.name"] = "名称";
+            m["src.col.path"] = "路径";
+            m["src.col.count"] = "图片数量";
+            m["src.state.on"] = "启用";
+            m["src.state.off"] = "禁用";
+            m["src.allon"] = "启用全部";
+            m["src.alloff"] = "禁用全部";
+            m["src.refresh"] = "刷新数量";
+            m["src.noSource"] = "尚未添加任何壁纸源，点击「添加...」选择一个图片文件夹";
+            m["src.summary"] = "共 {0} 个源 · 启用 {1} · 禁用 {2} · 启用源图片合计 {3} 张";
+            m["src.hint"] = "勾选「状态」＝ 启用该源，取消勾选 ＝ 禁用（暂时移出轮换）。禁用只影响轮换，图片与已勾选记录都会保留，重新勾选即恢复。数量递归统计（含子文件夹），只计支持的壁纸格式。";
+            m["src.count.pending"] = "…";
+            m["src.count.unavailable"] = "不可用";
+            m["src.saved"] = "已保存：{0} 个壁纸源（启用 {1} / 禁用 {2}）";
+            m["src.confirm.close"] = "有未保存的壁纸源更改，关闭前要保存吗？";
+
             m["help.title"] = "使用帮助";
             m["help.gotit"] = "知道了";
             return m;
@@ -180,10 +204,15 @@ namespace WallpaperChanger
             Dictionary<string, string> m = new Dictionary<string, string>();
             m["tray.tip"] = "WallpaperChanger - wallpaper rotator";
 
-            m["main.source.group"] = "Wallpaper sources (add via buttons, no manual input)";
+            m["main.source.group"] = "Wallpaper sources";
             m["main.source.add"] = "Add...";
             m["main.source.remove"] = "Remove selected";
-            m["main.source.clear"] = "Clear all";
+            m["main.source.manage"] = "Manage sources... (add / remove / enable / disable)";
+            m["main.source.summary.none"] = "No wallpaper source yet - click the button above to add one";
+            m["main.source.summary"] = "{0} sources · {1} enabled · {2} disabled";
+            m["main.source.all.on"] = "All sources are enabled";
+            m["main.source.off.list"] = "Disabled: {0}";
+            m["main.source.off.sep"] = ", ";
             m["main.manual.btn"] = "Manual wallpaper selection... (switch only checked ones)";
             m["main.settings.group"] = "Rotation settings";
             m["main.settings.style"] = "Style:";
@@ -249,6 +278,25 @@ namespace WallpaperChanger
             m["picker.bottom.hint"] = "Unchecked wallpapers never rotate; the random-order option keeps working inside the checked set";
             m["picker.caption"] = "Manual wallpaper selection";
 
+            m["src.title"] = "Wallpaper sources - WallpaperChanger v{0}";
+            m["src.caption"] = "Wallpaper sources";
+            m["src.col.state"] = "State";
+            m["src.col.name"] = "Name";
+            m["src.col.path"] = "Path";
+            m["src.col.count"] = "Wallpapers";
+            m["src.state.on"] = "Enabled";
+            m["src.state.off"] = "Disabled";
+            m["src.allon"] = "Enable all";
+            m["src.alloff"] = "Disable all";
+            m["src.refresh"] = "Recount";
+            m["src.noSource"] = "No wallpaper source yet - click \"Add...\" to pick a picture folder";
+            m["src.summary"] = "{0} sources · {1} enabled · {2} disabled · {3} wallpapers in enabled sources";
+            m["src.hint"] = "Tick \"State\" to enable a source, untick to disable it (temporarily removed from rotation). Disabling only affects rotation: the files and their checked wallpapers are kept, and re-ticking restores them. Counts are recursive (subfolders included) and cover supported wallpaper formats only.";
+            m["src.count.pending"] = "...";
+            m["src.count.unavailable"] = "Unavailable";
+            m["src.saved"] = "Saved: {0} sources (enabled {1} / disabled {2})";
+            m["src.confirm.close"] = "There are unsaved source changes. Save before closing?";
+
             m["help.title"] = "Help";
             m["help.gotit"] = "OK";
             return m;
@@ -260,10 +308,15 @@ namespace WallpaperChanger
             Dictionary<string, string> m = new Dictionary<string, string>();
             m["tray.tip"] = "WallpaperChanger - 壁紙ローテーター";
 
-            m["main.source.group"] = "壁紙ソース（ボタンで追加、手入力不可）";
+            m["main.source.group"] = "壁紙ソース";
             m["main.source.add"] = "追加...";
             m["main.source.remove"] = "選択を削除";
-            m["main.source.clear"] = "すべてクリア";
+            m["main.source.manage"] = "壁紙ソース管理…（追加 / 削除 / 有効・無効）";
+            m["main.source.summary.none"] = "壁紙ソースがまだありません。上のボタンから追加してください";
+            m["main.source.summary"] = "ソース {0} 件 · 有効 {1} · 無効 {2}";
+            m["main.source.all.on"] = "すべてのソースが有効です";
+            m["main.source.off.list"] = "無効: {0}";
+            m["main.source.off.sep"] = "、";
             m["main.manual.btn"] = "手動壁紙選択…（チェックした壁紙のみ切り替え）";
             m["main.settings.group"] = "ローテーション設定";
             m["main.settings.style"] = "表示スタイル:";
@@ -329,6 +382,25 @@ namespace WallpaperChanger
             m["picker.bottom.hint"] = "未チェックの壁紙は切り替え対象外です。ランダム順序の設定はそのまま動作します";
             m["picker.caption"] = "手動壁紙選択";
 
+            m["src.title"] = "壁紙ソース管理 - WallpaperChanger v{0}";
+            m["src.caption"] = "壁紙ソース管理";
+            m["src.col.state"] = "状態";
+            m["src.col.name"] = "名前";
+            m["src.col.path"] = "パス";
+            m["src.col.count"] = "壁紙数";
+            m["src.state.on"] = "有効";
+            m["src.state.off"] = "無効";
+            m["src.allon"] = "すべて有効";
+            m["src.alloff"] = "すべて無効";
+            m["src.refresh"] = "数を再取得";
+            m["src.noSource"] = "壁紙ソースがありません。「追加...」で画像フォルダーを選択してください";
+            m["src.summary"] = "ソース {0} 件 · 有効 {1} · 無効 {2} · 有効ソースの壁紙合計 {3} 枚";
+            m["src.hint"] = "「状態」をチェック＝そのソースを有効、外す＝無効（一時的にローテーションから除外）。無効にしても画像とチェック済みの記録は保持され、再チェックで復元されます。枚数はサブフォルダーを含めて再帰的に集計し、対応する壁紙形式のみを数えます。";
+            m["src.count.pending"] = "…";
+            m["src.count.unavailable"] = "利用不可";
+            m["src.saved"] = "保存しました：壁紙ソース {0} 件（有効 {1} / 無効 {2}）";
+            m["src.confirm.close"] = "未保存の壁紙ソース変更があります。閉じる前に保存しますか？";
+
             m["help.title"] = "ヘルプ";
             m["help.gotit"] = "閉じる";
             return m;
@@ -355,10 +427,11 @@ namespace WallpaperChanger
             return new HelpLine[]
             {
                 new HelpLine(1, "■ 壁纸源管理"),
-                new HelpLine(0, "  • 只能点击\"添加...\"按钮选择文件夹加入列表，不允许手动输入路径。"),
-                new HelpLine(0, "  • 选中列表中的一项后点\"删除选中\"即可移除该壁纸源。"),
-                new HelpLine(0, "  • \"清空全部\"一键移除所有壁纸源。"),
-                new HelpLine(0, "  • 可添加多个文件夹，程序会合并扫描所有来源的图片。"),
+                new HelpLine(0, "  • 点击\"壁纸源管理…\"按钮打开管理窗口，可添加 / 删除壁纸源，也能单独启用或禁用某个源。"),
+                new HelpLine(0, "  • 勾选某一行＝启用该源，取消勾选＝禁用：禁用的源不参与轮换，但图片与已勾选的壁纸都会保留，重新勾选即可恢复。"),
+                new HelpLine(0, "  • 列表里显示每个源包含的壁纸数量（递归统计子文件夹，只计支持的壁纸格式）；文件夹不存在会标记为\"不可用\"。"),
+                new HelpLine(0, "  • \"启用全部 / 禁用全部\"可批量切换；改完点\"保存\"写盘。"),
+                new HelpLine(0, "  • 可添加多个文件夹，程序会合并扫描所有启用来源的图片。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 保存与后台运行"),
                 new HelpLine(0, "  • 修改任意设置后，请点击\"保存设置\"按钮，才会写入配置文件。"),
@@ -394,10 +467,11 @@ namespace WallpaperChanger
             return new HelpLine[]
             {
                 new HelpLine(1, "■ Wallpaper sources"),
-                new HelpLine(0, "  • Use the \"Add...\" button to pick a folder; typing paths manually is not allowed."),
-                new HelpLine(0, "  • Select an item in the list and click \"Remove selected\" to drop that source."),
-                new HelpLine(0, "  • \"Clear all\" removes every source at once."),
-                new HelpLine(0, "  • Multiple folders are fine; images from all sources are scanned together."),
+                new HelpLine(0, "  • Click \"Manage sources...\" to open the manager: add or remove sources, and enable or disable each one individually."),
+                new HelpLine(0, "  • Tick a row = enable that source, untick = disable: a disabled source stops rotating, but its files and their checked wallpapers are kept, so re-ticking restores everything."),
+                new HelpLine(0, "  • Each row shows how many wallpapers the source holds (recursive, subfolders included, supported formats only); a missing folder is marked \"Unavailable\"."),
+                new HelpLine(0, "  • \"Enable all / Disable all\" toggles every row at once; click \"Save\" to write the changes."),
+                new HelpLine(0, "  • Multiple folders are fine; images from all ENABLED sources are scanned together."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ Saving & background operation"),
                 new HelpLine(0, "  • After changing any setting, click \"Save settings\" to write it to the config file."),
@@ -432,11 +506,12 @@ namespace WallpaperChanger
         {
             return new HelpLine[]
             {
-                new HelpLine(1, "■ 壁紙ソース"),
-                new HelpLine(0, "  • 「追加...」ボタンでフォルダーを選択して追加します。パスの手入力はできません。"),
-                new HelpLine(0, "  • リストの項目を選んで「選択を削除」をクリックすると、そのソースを削除できます。"),
-                new HelpLine(0, "  • 「すべてクリア」で全ソースを一括削除します。"),
-                new HelpLine(0, "  • 複数フォルダーを追加でき、すべてのソースの画像をまとめてスキャンします。"),
+                new HelpLine(1, "■ 壁紙ソース管理"),
+                new HelpLine(0, "  • 「壁紙ソース管理…」ボタンで管理ウィンドウを開きます。ソースの追加・削除と、個別の有効／無効の切り替えができます。"),
+                new HelpLine(0, "  • 行をチェック＝そのソースを有効、外す＝無効。無効にしても画像とチェック済みの壁紙は保持され、再チェックで復元されます。"),
+                new HelpLine(0, "  • 各行にそのソースの壁紙数が表示されます（サブフォルダーを含めて再帰的に集計、対応形式のみ）。フォルダーが無い場合は「利用不可」と表示されます。"),
+                new HelpLine(0, "  • 「すべて有効 / すべて無効」で一括切り替えできます。変更後は「保存」をクリックしてください。"),
+                new HelpLine(0, "  • 複数フォルダーを追加でき、有効なソースの画像をまとめてスキャンします。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 保存とバックグラウンド動作"),
                 new HelpLine(0, "  • 設定を変更したら「設定を保存」をクリックすると設定ファイルに書き込まれます。"),

@@ -9,10 +9,8 @@ namespace WallpaperChanger
 {
     public class MainForm : Form
     {
-        private ListBox lstFolders;
-        private Button btnAdd;
-        private Button btnRemove;
-        private Button btnClearAll;
+        private Button btnSources;
+        private Label lblSourceSummary;
         private Button btnHelp;
         private Button btnManualPick;
         private ComboBox cmbStyle;
@@ -99,7 +97,8 @@ namespace WallpaperChanger
             rotateTimer.Tick += delegate { AutoRotate(); };
 
             Config.Load();
-            Log.Write("config: hotkey=" + Config.Hotkey + ", folders=" + Config.Folders.Count);
+            Log.Write("config: hotkey=" + Config.Hotkey + ", folders=" + Config.Folders.Count
+                + ", disabled=" + Config.DisabledFolders.Count);
 
             // Populate the controls without letting any "changed -> save"
             // handler run half-initialized, then persist once with the real
@@ -151,25 +150,18 @@ namespace WallpaperChanger
             gbSource.SetBounds(12, 12, 456, 168);
             Controls.Add(gbSource);
 
-            lstFolders = new ListBox();
-            lstFolders.SetBounds(15, 42, 336, 114);
-            lstFolders.SelectionMode = SelectionMode.One;
-            gbSource.Controls.Add(lstFolders);
+            // One entry point into the source manager. The old inline list
+            // and its add / remove / clear buttons moved into that dialog,
+            // which also gained per-source enable/disable and image counts.
+            btnSources = new Button();
+            btnSources.SetBounds(15, 40, 426, 46);
+            btnSources.Click += delegate { OpenSourceManager(); };
+            gbSource.Controls.Add(btnSources);
 
-            btnAdd = new Button();
-            btnAdd.SetBounds(361, 42, 82, 30);
-            btnAdd.Click += delegate { BrowseFolder(); };
-            gbSource.Controls.Add(btnAdd);
-
-            btnRemove = new Button();
-            btnRemove.SetBounds(361, 76, 82, 30);
-            btnRemove.Click += delegate { RemoveSelectedFolder(); };
-            gbSource.Controls.Add(btnRemove);
-
-            btnClearAll = new Button();
-            btnClearAll.SetBounds(361, 110, 82, 30);
-            btnClearAll.Click += delegate { ClearAllFolders(); };
-            gbSource.Controls.Add(btnClearAll);
+            lblSourceSummary = new Label();
+            lblSourceSummary.SetBounds(15, 96, 426, 56);
+            lblSourceSummary.ForeColor = Color.FromArgb(96, 96, 96);
+            gbSource.Controls.Add(lblSourceSummary);
 
             // Manual wallpaper picker: opens the selection dialog where the
             // user curates which wallpapers participate in switching.
@@ -300,9 +292,7 @@ namespace WallpaperChanger
         private void ApplyTexts()
         {
             gbSource.Text = Loc.T("main.source.group");
-            btnAdd.Text = Loc.T("main.source.add");
-            btnRemove.Text = Loc.T("main.source.remove");
-            btnClearAll.Text = Loc.T("main.source.clear");
+            btnSources.Text = Loc.T("main.source.manage");
             btnManualPick.Text = Loc.T("main.manual.btn");
             gbSettings.Text = Loc.T("main.settings.group");
             lblStyle.Text = Loc.T("main.settings.style");
@@ -316,6 +306,7 @@ namespace WallpaperChanger
             btnPrev.Text = Loc.T("main.btn.prev");
             btnSave.Text = Loc.T("main.btn.save");
             btnHelp.Text = Loc.T("main.btn.help");
+            RefreshSourceSummary();
 
             SetComboItems(cmbStyle, Loc.StyleNames());
             SetComboItems(cmbInterval, Loc.IntervalNames());
@@ -432,92 +423,65 @@ namespace WallpaperChanger
             }
         }
 
-        private void BrowseFolder()
+        // Open the source manager (modal). It persists to Config on its own
+        // save button, so here we only refresh the summary and restart the
+        // timer; the first valid source also kicks off a wallpaper swap.
+        private void OpenSourceManager()
         {
-            using (FolderBrowserDialog dlg = new FolderBrowserDialog())
+            bool hadValid = HasValidFolders();
+            bool changed;
+            using (SourceManagerForm dlg = new SourceManagerForm(this))
             {
-                dlg.Description = Loc.T("dialog.pickfolder");
-                string seed = FirstExistingFolder();
-                if (seed != null) dlg.SelectedPath = seed;
-                if (dlg.ShowDialog(this) == DialogResult.OK)
-                {
-                    AppendFolder(dlg.SelectedPath);
-                }
+                dlg.ShowDialog(this);
+                changed = dlg.Changed;
             }
+            if (!changed) return;
+            RefreshSourceSummary();
+            RestartTimer();
+            if (!hadValid && HasValidFolders()) NextWallpaper();
         }
 
-        private string FirstExistingFolder()
+        // Two-line summary under the manager button: how many sources exist,
+        // how many are enabled, and which ones are currently disabled.
+        private void RefreshSourceSummary()
         {
+            if (lblSourceSummary == null) return;
+            int total = Config.Folders.Count;
+            if (total == 0)
+            {
+                lblSourceSummary.Text = Loc.T("main.source.summary.none");
+                return;
+            }
+            List<string> off = new List<string>();
             foreach (string f in Config.Folders)
             {
-                if (Directory.Exists(f)) return f;
+                if (!Config.IsSourceEnabled(f)) off.Add(SourceName(f));
             }
-            return null;
+            string head = Loc.F("main.source.summary", total, total - off.Count, off.Count);
+            if (off.Count == 0)
+                head += "\r\n" + Loc.T("main.source.all.on");
+            else
+                head += "\r\n" + Loc.F("main.source.off.list",
+                    string.Join(Loc.T("main.source.off.sep"), off.ToArray()));
+            lblSourceSummary.Text = head;
         }
 
-        private void AppendFolder(string folder)
+        private static string SourceName(string folder)
         {
-            if (string.IsNullOrEmpty(folder)) return;
-            // dedupe: same folder added again -> just inform
-            foreach (string existing in Config.Folders)
+            try
             {
-                if (string.Equals(existing.Trim(), folder, StringComparison.OrdinalIgnoreCase))
-                {
-                    SetStatus(Loc.T("status.folder.dup"));
-                    return;
-                }
+                string n = Path.GetFileName(folder.TrimEnd('\\', '/'));
+                if (!string.IsNullOrEmpty(n)) return n;
             }
-
-            // Only auto-apply when there was NO valid source before, so adding
-            // another folder never yanks the wallpaper away from the user.
-            bool hadValidSource = HasValidFolders();
-
-            Config.Folders.Add(folder);
-            SyncFolderList();
-            dirty = true;
-            RestartTimer();
-            if (!hadValidSource) NextWallpaper();
-        }
-
-        private void RemoveSelectedFolder()
-        {
-            int i = lstFolders.SelectedIndex;
-            if (i < 0)
+            catch
             {
-                SetStatus(Loc.T("status.folder.pickfirst"));
-                return;
             }
-            Config.Folders.RemoveAt(i);
-            SyncFolderList();
-            dirty = true;
-            RestartTimer();
-        }
-
-        private void ClearAllFolders()
-        {
-            if (Config.Folders.Count == 0)
-            {
-                SetStatus(Loc.T("status.folder.empty"));
-                return;
-            }
-            Config.Folders.Clear();
-            SyncFolderList();
-            dirty = true;
-            RestartTimer();
-        }
-
-        // Mirror the in-memory Config.Folders into the read-only list box.
-        private void SyncFolderList()
-        {
-            lstFolders.BeginUpdate();
-            lstFolders.Items.Clear();
-            foreach (string f in Config.Folders) lstFolders.Items.Add(f);
-            lstFolders.EndUpdate();
+            return folder;
         }
 
         private void LoadSettingsIntoUi()
         {
-            SyncFolderList();
+            RefreshSourceSummary();
             cmbStyle.SelectedIndex = (int)Config.Style;
             int idx = IndexOfInterval(Config.IntervalMinutes);
             cmbInterval.SelectedIndex = idx >= 0 ? idx : 2;
@@ -544,15 +508,8 @@ namespace WallpaperChanger
         // Read the controls into the in-memory Config (no disk write).
         private void ApplyFromUi()
         {
-            // Folders live in the read-only list (a mirror of Config), so
-            // rebuild from the list to stay in sync with any UI-side change.
-            List<string> folders = new List<string>();
-            foreach (object item in lstFolders.Items)
-            {
-                string s = item.ToString().Trim();
-                if (s.Length > 0) folders.Add(s);
-            }
-            Config.Folders = folders;
+            // Sources are owned by the source manager, which writes straight
+            // to Config; there is nothing to collect from the UI here.
             Config.Style = (WallpaperStyle)Math.Max(0, cmbStyle.SelectedIndex);
             Config.IntervalMinutes = IntervalFromIndex(cmbInterval.SelectedIndex);
             Config.RandomOrder = chkRandom.Checked;
@@ -571,10 +528,11 @@ namespace WallpaperChanger
             Config.Save();
         }
 
+        // At least one ENABLED source must exist on disk. Disabled sources
+        // are ignored, so turning every source off also stops the timer.
         private bool HasValidFolders()
         {
-            if (Config.Folders.Count == 0) return false;
-            foreach (string f in Config.Folders)
+            foreach (string f in Config.EnabledFolders())
             {
                 if (Directory.Exists(f)) return true;
             }
@@ -733,7 +691,7 @@ namespace WallpaperChanger
         private void StartFreshPickTask()
         {
             forward.Clear();
-            List<string> folders = new List<string>(Config.Folders);
+            List<string> folders = Config.EnabledFolders();
             bool recursive = Config.Recursive;
 
             Task.Run(delegate
@@ -796,7 +754,7 @@ namespace WallpaperChanger
                     catch { currentSet.Add(p); }
                 }
 
-                List<string> source = ImageScanner.ScanMany(Config.Folders, Config.Recursive);
+                List<string> source = ImageScanner.ScanMany(Config.EnabledFolders(), Config.Recursive);
                 if (source.Count == 0) return false;
 
                 HashSet<string> sourceSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

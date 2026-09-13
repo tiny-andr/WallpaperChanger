@@ -79,12 +79,67 @@ namespace WallpaperChanger
         // on, unchecking all of them turns it off.
         public static List<string> ManualPicked = new List<string>();
 
+        // Wallpaper sources the user temporarily turned off in the source
+        // manager. A disabled source is skipped by every scan, so its images
+        // never enter rotation, but it keeps its slot in Folders and its
+        // checked wallpapers stay in ManualPicked -- re-enabling restores
+        // everything with one click.
+        public static List<string> DisabledFolders = new List<string>();
+
         private static string ConfigPath
         {
             get
             {
                 return Path.Combine(AppPaths.DataDir, "WallpaperChanger.ini");
             }
+        }
+
+        // A source is enabled unless its path is listed in DisabledFolders.
+        // Comparison is case-insensitive on trimmed paths; a null entry is
+        // treated as disabled so it can never sneak into a scan.
+        public static bool IsSourceEnabled(string folder)
+        {
+            if (string.IsNullOrEmpty(folder)) return false;
+            string f = folder.Trim();
+            foreach (string d in DisabledFolders)
+            {
+                if (d != null && string.Equals(d.Trim(), f, StringComparison.OrdinalIgnoreCase)) return false;
+            }
+            return true;
+        }
+
+        // Sources that participate in rotation right now: every configured
+        // folder minus the disabled ones. Scanners call this instead of
+        // reading Folders directly.
+        public static List<string> EnabledFolders()
+        {
+            List<string> r = new List<string>();
+            foreach (string f in Folders)
+            {
+                if (IsSourceEnabled(f)) r.Add(f);
+            }
+            return r;
+        }
+
+        // Drop 'disabled' entries that no longer match a configured folder,
+        // so a manually edited ini cannot leave dangling state behind.
+        private static void PruneDisabled()
+        {
+            if (DisabledFolders.Count == 0) return;
+            List<string> keep = new List<string>();
+            foreach (string d in DisabledFolders)
+            {
+                if (d == null) continue;
+                foreach (string f in Folders)
+                {
+                    if (f != null && string.Equals(d.Trim(), f.Trim(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        keep.Add(d);
+                        break;
+                    }
+                }
+            }
+            DisabledFolders = keep;
         }
 
         public static void Load()
@@ -95,6 +150,7 @@ namespace WallpaperChanger
                 Dictionary<string, string> single = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                 List<string> folderList = new List<string>();
                 List<string> pickedList = new List<string>();
+                List<string> disabledList = new List<string>();
                 foreach (string rawLine in File.ReadAllLines(ConfigPath, Encoding.UTF8))
                 {
                     string line = rawLine.Trim();
@@ -111,6 +167,10 @@ namespace WallpaperChanger
                     {
                         if (val.Length > 0) pickedList.Add(val);
                     }
+                    else if (string.Equals(key, "disabled", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (val.Length > 0) disabledList.Add(val);
+                    }
                     else
                     {
                         single[key] = val;
@@ -119,6 +179,8 @@ namespace WallpaperChanger
 
                 if (folderList.Count > 0) Folders = folderList;
                 ManualPicked = pickedList;
+                DisabledFolders = disabledList;
+                PruneDisabled();
                 string v;
                 if (single.TryGetValue("interval_minutes", out v))
                 {
@@ -171,6 +233,11 @@ namespace WallpaperChanger
                 foreach (string folder in Folders)
                 {
                     sb.AppendLine("folder=" + folder);
+                }
+                sb.AppendLine("; 'disabled=' lines name sources turned off in the source manager");
+                foreach (string off in DisabledFolders)
+                {
+                    sb.AppendLine("disabled=" + off);
                 }
                 foreach (string picked in ManualPicked)
                 {

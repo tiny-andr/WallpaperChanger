@@ -224,7 +224,9 @@ namespace WallpaperChanger
 
         private void StartScan()
         {
-            List<string> folders = new List<string>(Config.Folders);
+            // Only enabled sources: a source turned off in the manager has no
+            // wallpapers to offer here either.
+            List<string> folders = Config.EnabledFolders();
             bool recursive = Config.Recursive;
             ShowGridInfo(Loc.T("picker.scanning"));
             Task.Run(delegate
