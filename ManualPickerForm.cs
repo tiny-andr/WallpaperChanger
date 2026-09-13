@@ -226,6 +226,26 @@ namespace WallpaperChanger
             if (canvas != null && !closing) LayoutChrome();
         }
 
+        // Width of the widest entry in the source combo, so the control sizes
+        // to its content instead of stretching across the window.
+        private int MeasureComboWidth()
+        {
+            if (cmbSource == null) return 200;
+            int widest = 0;
+            using (Graphics g = cmbSource.CreateGraphics())
+            {
+                foreach (object item in cmbSource.Items)
+                {
+                    string s = item as string;
+                    if (string.IsNullOrEmpty(s)) continue;
+                    int w = TextRenderer.MeasureText(g, s, cmbSource.Font).Width;
+                    if (w > widest) widest = w;
+                }
+            }
+            // Room for the drop-down arrow, the border and the scrollbar.
+            return widest + 48;
+        }
+
         private void LayoutChrome()
         {
             if (sf < 0.5f) sf = DeviceDpi / 96f;
@@ -235,7 +255,9 @@ namespace WallpaperChanger
             // The source filter owns a row of its own above the button row.
             // It must never share a line with the buttons: a long source name
             // used to stretch the combo across the row and push the bulk
-            // buttons off the left edge.
+            // buttons off the left edge. The combo also stays deliberately
+            // narrow - it is a filter, not a headline - so its width is capped
+            // well below the window width no matter how long the names are.
             int left = (int)(14 * sf);
             bool srcRow = cmbSource != null && cmbSource.Visible;
             int rowTop = srcRow ? (int)(48 * sf) : (int)(12 * sf);
@@ -243,9 +265,11 @@ namespace WallpaperChanger
             {
                 lblSource.Location = new Point(left, (int)(14 * sf) + (int)(4 * sf));
                 cmbSource.Location = new Point(lblSource.Right + (int)(6 * sf), (int)(14 * sf));
-                int srcRight = right;
-                if (lblCount != null) srcRight = lblCount.Right;
-                cmbSource.Width = Math.Max((int)(160 * sf), srcRight - cmbSource.Left);
+                int want = MeasureComboWidth();
+                int roomy = Math.Max((int)(160 * sf), right - cmbSource.Left);
+                cmbSource.Width = Math.Max((int)(160 * sf),
+                    Math.Min(Math.Min(want, (int)(240 * sf)), roomy));
+                cmbSource.DropDownWidth = cmbSource.Width;
             }
 
             // Right-aligned: count label, then the filter box, then the three
@@ -511,7 +535,7 @@ namespace WallpaperChanger
                 for (int i = 0; i < sourceFolders.Count; i++)
                 {
                     cmbSource.Items.Add(Loc.F("picker.src.one",
-                        SourceNames.Display(sourceFolders[i]), sourceCounts[i]));
+                        ShortSourceName(sourceFolders[i]), sourceCounts[i]));
                 }
                 int def = PickedCount() > 0 ? 1 : 0;
                 cmbSource.SelectedIndex = def;
@@ -521,6 +545,17 @@ namespace WallpaperChanger
             {
                 comboUpdating = false;
             }
+        }
+
+        // Folder names are often far too long to show in full. Keep the head,
+        // which is the part that usually tells sources apart, and elide the
+        // rest so the drop-down stays readable in a narrow control.
+        private static string ShortSourceName(string folder)
+        {
+            string name = SourceNames.Display(folder);
+            const int Max = 16;
+            if (name.Length <= Max) return name;
+            return name.Substring(0, Max - 1) + "\u2026";
         }
 
         // Keep the "checked wallpapers (n)" entry in step with the live count
