@@ -244,7 +244,9 @@ namespace WallpaperChanger
             cmbLang.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbLang.SetBounds(110, 193, 170, 25);
             cmbLang.Items.AddRange(Loc.LanguageDisplayNames);
-            cmbLang.SelectedIndex = 0;
+            // Leave "no selection" here: the real index comes from the saved
+            // language in SyncLanguageCombo(). Selecting 0 unconditionally made
+            // the box read 中文 even when the UI started up in English.
             cmbLang.SelectedIndexChanged += delegate
             {
                 if (loadingUi) return;
@@ -350,11 +352,34 @@ namespace WallpaperChanger
         // Switch the whole UI language at runtime: update Loc, remember it
         // in the config and persist right away (a language choice is an
         // unambiguous one-click decision, no separate "save" needed).
+        // Point the language box at the language that is actually in effect.
+        // Guarded so the resulting SelectedIndexChanged does not re-enter
+        // ChangeLanguage (which would re-save the config on startup).
+        private void SyncLanguageCombo()
+        {
+            if (cmbLang == null) return;
+            int want = 0;
+            for (int i = 0; i < Loc.LanguageCodes.Length; i++)
+            {
+                if (string.Equals(Loc.LanguageCodes[i], Loc.Language, StringComparison.OrdinalIgnoreCase))
+                {
+                    want = i;
+                    break;
+                }
+            }
+            if (cmbLang.SelectedIndex == want) return;
+            bool prev = loadingUi;
+            loadingUi = true;
+            try { cmbLang.SelectedIndex = want; }
+            finally { loadingUi = prev; }
+        }
+
         private void ChangeLanguage(string lang)
         {
             Loc.SetLanguage(lang);
             Config.Language = lang;
             Config.Save();
+            SyncLanguageCombo();
             ApplyTexts();
         }
 
@@ -492,6 +517,7 @@ namespace WallpaperChanger
         private void LoadSettingsIntoUi()
         {
             RefreshSourceSummary();
+            SyncLanguageCombo();
             cmbStyle.SelectedIndex = (int)Config.Style;
             int idx = IndexOfInterval(Config.IntervalMinutes);
             cmbInterval.SelectedIndex = idx >= 0 ? idx : 2;
