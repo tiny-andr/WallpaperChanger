@@ -205,7 +205,7 @@ namespace WallpaperChanger
 
             int saveH = (int)(34 * sf);
             int rowH = (int)(30 * sf);
-            int hintH = (int)(46 * sf);
+            int hintH = (int)(66 * sf);   // summary line + a two-line hint
             int bottom = h - m - saveH;
             int btnRowY = bottom - gap - rowH;
             int hintY = btnRowY - gap - hintH;
