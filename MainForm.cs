@@ -269,7 +269,7 @@ namespace WallpaperChanger
             {
                 SaveFromUi();
                 dirty = false;
-                SetStatus(Loc.T("status.saved"));
+                SetStatus(delegate { return Loc.T("status.saved"); });
                 notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.saved"), ToolTipIcon.Info);
             };
             Controls.Add(btnSave);
@@ -569,14 +569,14 @@ namespace WallpaperChanger
             {
                 rotateTimer.Stop();
                 miPause.Text = Loc.T("tray.resume");
-                SetStatus(Loc.T("status.rotate.paused"));
+                SetStatus(delegate { return Loc.T("status.rotate.paused"); });
                 notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.paused"), ToolTipIcon.Info);
             }
             else
             {
                 rotateTimer.Start();
                 miPause.Text = Loc.T("tray.pause");
-                SetStatus(Loc.T("status.rotate.resumed"));
+                SetStatus(delegate { return Loc.T("status.rotate.resumed"); });
                 notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.rotate.resumed"), ToolTipIcon.Info);
             }
         }
@@ -620,7 +620,7 @@ namespace WallpaperChanger
             if (busy) return;
             if (!HasValidFolders())
             {
-                SetStatus(Loc.T("status.novalidfolder"));
+                SetStatus(delegate { return Loc.T("status.novalidfolder"); });
                 return;
             }
 
@@ -672,12 +672,14 @@ namespace WallpaperChanger
                         {
                             PushHistory(path);
                             Log.Write("next(redo): " + path);
-                            SetStatus(Loc.F("status.current", name, total) + ModeTag());
+                            string n1 = name; int t1 = total;
+                            SetStatus(delegate { return Loc.F("status.current", n1, t1) + ModeTag(); });
                         }
                         else
                         {
                             Log.Write("redo apply failed: " + path);
-                            SetStatus(Loc.F("status.applyfail", name));
+                            string n2 = name;
+                            SetStatus(delegate { return Loc.F("status.applyfail", n2); });
                         }
                     }
                     finally
@@ -786,18 +788,21 @@ namespace WallpaperChanger
                     Log.Write("applied: " + path);
                     PushHistory(path);
                     lastTotal = total;
-                    SetStatus(Loc.F("status.current", Path.GetFileName(path), total) + ModeTag());
+                    string n3 = Path.GetFileName(path); int t3 = total;
+                    SetStatus(delegate { return Loc.F("status.current", n3, t3) + ModeTag(); });
                 }
                 else
                 {
                     Log.Write("apply failed: " + path);
-                    SetStatus(Loc.F("status.applyfail", Path.GetFileName(path)));
+                    string n4 = Path.GetFileName(path);
+                    SetStatus(delegate { return Loc.F("status.applyfail", n4); });
                 }
             }
             catch (Exception ex)
             {
                 Log.Write("apply error: " + ex.Message);
-                SetStatus(Loc.F("status.error", ex.Message));
+                string em = ex.Message;
+                SetStatus(delegate { return Loc.F("status.error", em); });
             }
             finally
             {
@@ -915,7 +920,7 @@ namespace WallpaperChanger
             if (busy) return;
             if (history.Count < 2)
             {
-                SetStatus(Loc.T("status.noprev"));
+                SetStatus(delegate { return Loc.T("status.noprev"); });
                 return;
             }
 
@@ -949,11 +954,13 @@ namespace WallpaperChanger
                             history.RemoveAt(history.Count - 1);   // drop the current entry
                             PushForward(departed);
                             Log.Write("previous: " + target);
-                            SetStatus(Loc.F("status.current.prev", name) + ModeTag());
+                            string n5 = name;
+                            SetStatus(delegate { return Loc.F("status.current.prev", n5) + ModeTag(); });
                         }
                         else
                         {
-                            SetStatus(Loc.F("status.prevfail", name));
+                            string n6 = name;
+                            SetStatus(delegate { return Loc.F("status.prevfail", n6); });
                         }
                     }
                     finally
@@ -964,19 +971,35 @@ namespace WallpaperChanger
             });
         }
 
+        // The first status line is stored as a renderer rather than as text, so
+        // a language change can re-render it in the new language. Storing the
+        // finished string meant the line kept whatever language was active when
+        // it was last written, until the next wallpaper change.
+        private Func<string> statusLine;
+
         private void SetStatus(string line)
         {
-            lblStatus.Text = line + "\r\n" + NextSwitchText();
+            statusLine = delegate { return line; };
+            RenderStatus();
         }
 
-        // Keep whatever is on the first line, just refresh the second
-        // (the "next switch" / "paused" line) so the countdown updates.
+        private void SetStatus(Func<string> render)
+        {
+            statusLine = render;
+            RenderStatus();
+        }
+
+        private void RenderStatus()
+        {
+            string first = statusLine != null ? (statusLine() ?? "") : "";
+            if (first.Length == 0) lblStatus.Text = NextSwitchText();
+            else lblStatus.Text = first + "\r\n" + NextSwitchText();
+        }
+
+        // Re-render both lines, so the first one follows the current language.
         private void RefreshStatusLine()
         {
-            string t = lblStatus.Text ?? "";
-            int i = t.IndexOf('\r');
-            string first = (i >= 0) ? t.Substring(0, i) : t;
-            lblStatus.Text = first + "\r\n" + NextSwitchText();
+            RenderStatus();
         }
 
         private string NextSwitchText()

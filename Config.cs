@@ -259,21 +259,14 @@ namespace WallpaperChanger
         }
     }
 
+    // Display names live in Loc.StyleNames() so they follow the UI language.
     public enum WallpaperStyle
     {
-        Fill,     // 填充
-        Fit,      // 适应
-        Stretch,  // 拉伸
-        Tile,     // 平铺
-        Center,   // 居中
-        Span      // 跨区
-    }
-
-    public static class StyleNames
-    {
-        public static readonly string[] Chinese =
-        {
-            "填充", "适应", "拉伸", "平铺", "居中", "跨区"
-        };
+        Fill,
+        Fit,
+        Stretch,
+        Tile,
+        Center,
+        Span
     }
 }

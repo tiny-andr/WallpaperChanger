@@ -51,7 +51,7 @@ namespace WallpaperChanger
             Unregister();
             if (next >= 0 && next <= 9 && next == prev)
             {
-                string msg = "上一张快捷键不能与下一张相同（都是 Ctrl+" + next + "）";
+                string msg = Loc.F("hotkey.err.same", next);
                 Log.Write("hotkey: conflict " + msg);
                 return msg;
             }
@@ -60,13 +60,13 @@ namespace WallpaperChanger
             if (next >= 0 && next <= 9)
             {
                 if (!RegisterOne(ID_NEXT_MAIN + next, ID_NEXT_PAD + next, next))
-                    problem = "下一张快捷键 Ctrl+" + next + " 注册失败（可能已被其他程序占用）";
+                    problem = Loc.F("hotkey.err.next", next);
             }
             if (prev >= 0 && prev <= 9)
             {
                 if (!RegisterOne(ID_PREV_MAIN + prev, ID_PREV_PAD + prev, prev))
-                    problem = (problem == null ? "" : problem + "；") +
-                              "上一张快捷键 Ctrl+" + prev + " 注册失败（可能已被其他程序占用）";
+                    problem = (problem == null ? "" : problem + Loc.T("hotkey.err.join")) +
+                              Loc.F("hotkey.err.prev", prev);
             }
 
             nextDigit = next;

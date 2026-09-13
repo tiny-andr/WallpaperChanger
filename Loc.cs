@@ -125,6 +125,10 @@ namespace WallpaperChanger
             m["main.hotkey.none"] = "无快捷键";
 
             m["status.saved"] = "设置已保存";
+            m["hotkey.err.same"] = "上一张快捷键不能与下一张相同（都是 Ctrl+{0}）";
+            m["hotkey.err.next"] = "下一张快捷键 Ctrl+{0} 注册失败（可能已被其他程序占用）";
+            m["hotkey.err.prev"] = "上一张快捷键 Ctrl+{0} 注册失败（可能已被其他程序占用）";
+            m["hotkey.err.join"] = "；";
             m["status.folder.dup"] = "该文件夹已经在壁纸源列表里";
             m["status.folder.pickfirst"] = "请先在列表中选中要删除的壁纸源";
             m["status.folder.empty"] = "壁纸源列表已经是空的";
@@ -234,6 +238,10 @@ namespace WallpaperChanger
             m["main.hotkey.none"] = "No hotkey";
 
             m["status.saved"] = "Settings saved";
+            m["hotkey.err.same"] = "Previous hotkey cannot match Next (both Ctrl+{0})";
+            m["hotkey.err.next"] = "Could not register the Next hotkey Ctrl+{0} (another program may be using it)";
+            m["hotkey.err.prev"] = "Could not register the Previous hotkey Ctrl+{0} (another program may be using it)";
+            m["hotkey.err.join"] = "; ";
             m["status.folder.dup"] = "This folder is already in the source list";
             m["status.folder.pickfirst"] = "Select a source in the list first";
             m["status.folder.empty"] = "The source list is already empty";
@@ -343,6 +351,10 @@ namespace WallpaperChanger
             m["main.hotkey.none"] = "ホットキーなし";
 
             m["status.saved"] = "設定を保存しました";
+            m["hotkey.err.same"] = "前の壁紙のショートカットは次と同じにできません（どちらも Ctrl+{0}）";
+            m["hotkey.err.next"] = "次の壁紙のショートカット Ctrl+{0} を登録できませんでした（他のプログラムが使用中の可能性があります）";
+            m["hotkey.err.prev"] = "前の壁紙のショートカット Ctrl+{0} を登録できませんでした（他のプログラムが使用中の可能性があります）";
+            m["hotkey.err.join"] = "；";
             m["status.folder.dup"] = "このフォルダーはすでにソース一覧にあります";
             m["status.folder.pickfirst"] = "先にリストで削除するソースを選択してください";
             m["status.folder.empty"] = "ソース一覧はすでに空です";
