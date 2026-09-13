@@ -47,8 +47,15 @@ namespace WallpaperChanger
         private readonly Dictionary<string, int> counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> counting = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Pristine snapshot taken at construction and after every save. The
+        // close prompt compares against it instead of trusting an event-driven
+        // dirty bit: the list view echoes its initial check states back through
+        // ItemChecked once its handle exists, which used to make a dialog the
+        // user never touched look modified.
+        private readonly List<string> pristineFolders = new List<string>();
+        private readonly HashSet<string> pristineDisabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         private bool loading;      // suppress ItemChecked while rows are rebuilt
-        private bool dirty;
         private bool closing;
         private bool sfReady;
         private float sf = 1f;
@@ -84,6 +91,7 @@ namespace WallpaperChanger
             {
                 if (d != null) disabled.Add(d.Trim());
             }
+            SnapshotPristine();
 
             BuildChrome();
             RebuildList();
@@ -383,9 +391,13 @@ namespace WallpaperChanger
             if (loading) return;
             string folder = e.Item.Tag as string;
             if (folder == null) return;
+            // The control echoes every programmatic state change back through
+            // this event. Only a click that contradicts the model is a real
+            // edit; anything else is noise, notably the initial check states
+            // replayed when the list view handle is created.
+            if (e.Item.Checked == !disabled.Contains(folder)) return;
             if (e.Item.Checked) disabled.Remove(folder);
             else disabled.Add(folder);
-            dirty = true;
             flash = null;
             RefreshRow(e.Item);
             UpdateHint();
@@ -410,7 +422,6 @@ namespace WallpaperChanger
                     }
                 }
                 folders.Add(folder);
-                dirty = true;
                 flash = null;
                 RebuildList();
                 StartCounts();
@@ -450,7 +461,6 @@ namespace WallpaperChanger
                 counts.Remove(f);
                 counting.Remove(f);
             }
-            dirty = true;
             flash = null;
             RebuildList();
             StartCounts();
@@ -470,7 +480,6 @@ namespace WallpaperChanger
                 else disabled.Add(f);
                 RefreshRow(it);
             }
-            dirty = true;
             flash = null;
             UpdateHint();
         }
@@ -485,7 +494,7 @@ namespace WallpaperChanger
             }
             Config.DisabledFolders = off;
             Config.Save();
-            dirty = false;
+            SnapshotPristine();
             Changed = true;
             flash = Loc.F("src.saved", folders.Count, folders.Count - off.Count, off.Count);
             UpdateHint();
@@ -498,11 +507,45 @@ namespace WallpaperChanger
             Close();
         }
 
+        // Remember the state that is currently on disk, so a later close can
+        // tell whether anything actually needs saving.
+        private void SnapshotPristine()
+        {
+            pristineFolders.Clear();
+            pristineFolders.AddRange(folders);
+            pristineDisabled.Clear();
+            foreach (string d in disabled)
+            {
+                pristineDisabled.Add(d);
+            }
+        }
+
+        // Modified means the source list or the enabled set really differs from
+        // the last saved state. Comparing snapshots instead of tracking events
+        // also means a source toggled off and back on leaves nothing to save.
+        private bool IsDirty()
+        {
+            if (pristineFolders.Count != folders.Count) return true;
+            for (int i = 0; i < folders.Count; i++)
+            {
+                if (!string.Equals(pristineFolders[i], folders[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            if (pristineDisabled.Count != disabled.Count) return true;
+            foreach (string d in pristineDisabled)
+            {
+                if (!disabled.Contains(d)) return true;
+            }
+            return false;
+        }
+
         // Ask once whether unsaved source changes should be saved. False only
         // when the user picked Cancel.
         private bool ConfirmCloseAllowed()
         {
-            if (closing || !dirty) return true;
+            if (closing || !IsDirty()) return true;
             DialogResult r = MessageBox.Show(this,
                 Loc.T("src.confirm.close"),
                 Loc.T("src.caption"), MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
