@@ -97,6 +97,11 @@ namespace WallpaperChanger
             cmbSource = new ComboBox();
             cmbSource.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbSource.SetBounds(80, 12, 260, 26);
+            // Cap the drop-down at roughly eight rows; beyond that the list
+            // gets its own scrollbar instead of running down the whole screen.
+            cmbSource.DropDownHeight = 26 * 8;
+            cmbSource.IntegralHeight = false;
+            cmbSource.MaxDropDownItems = 8;
             cmbSource.Visible = false;
             cmbSource.SelectedIndexChanged += delegate { OnSourceFilterChanged(); };
             Controls.Add(cmbSource);
@@ -227,26 +232,50 @@ namespace WallpaperChanger
             int right = ClientSize.Width - (int)(14 * sf);
             int gap = (int)(10 * sf);
 
-            // With the source filter present the button row moves down one
-            // line; everything else follows off btnAll.Top.
+            // The source filter owns a row of its own above the button row.
+            // It must never share a line with the buttons: a long source name
+            // used to stretch the combo across the row and push the bulk
+            // buttons off the left edge.
+            int left = (int)(14 * sf);
             bool srcRow = cmbSource != null && cmbSource.Visible;
-            int rowTop = srcRow ? (int)(46 * sf) : (int)(12 * sf);
+            int rowTop = srcRow ? (int)(48 * sf) : (int)(12 * sf);
             if (srcRow)
             {
-                lblSource.Location = new Point((int)(14 * sf), rowTop + (int)(5 * sf));
-                cmbSource.Location = new Point(lblSource.Right + (int)(6 * sf), rowTop);
-                cmbSource.Width = Math.Max((int)(200 * sf), right - cmbSource.Left);
+                lblSource.Location = new Point(left, (int)(14 * sf) + (int)(4 * sf));
+                cmbSource.Location = new Point(lblSource.Right + (int)(6 * sf), (int)(14 * sf));
+                int srcRight = right;
+                if (lblCount != null) srcRight = lblCount.Right;
+                cmbSource.Width = Math.Max((int)(160 * sf), srcRight - cmbSource.Left);
             }
-            btnAll.Top = rowTop;
 
-            lblCount.Location = new Point(right - lblCount.Width, btnAll.Top);
-            txtFilter.Width = Math.Max(220, (int)(300 * sf));
-            txtFilter.Location = new Point(lblCount.Left - txtFilter.Width - gap, btnAll.Top);
+            // Right-aligned: count label, then the filter box, then the three
+            // bulk buttons marching left. Every button keeps its natural width
+            // because the filter box yields the slack instead.
+            lblCount.Location = new Point(right - lblCount.Width, rowTop + (int)(3 * sf));
+            int btnBudget = btnAll.Width + btnNone.Width + btnInvert.Width + (int)(12 * sf);
+            int filterMin = (int)(150 * sf);
+            int filterW = Math.Max(filterMin, (int)(280 * sf));
+            int fixedW = btnBudget + filterW + gap * 2;
+            int avail = (lblCount.Left - (int)(10 * sf)) - left;
+            if (fixedW > avail)
+            {
+                filterW = Math.Max((int)(90 * sf), avail - btnBudget - gap * 2);
+            }
+            txtFilter.Width = filterW;
+            txtFilter.Location = new Point(right - lblCount.Width - gap - txtFilter.Width, rowTop);
             lblPlaceholder.Location = new Point(txtFilter.Left + 6, txtFilter.Top + 4);
             lblPlaceholder.Width = txtFilter.Width - 12;
-            btnInvert.Location = new Point(txtFilter.Left - btnInvert.Width - gap, btnAll.Top);
-            btnNone.Location = new Point(btnInvert.Left - btnNone.Width - (int)(6 * sf), btnAll.Top);
-            btnAll.Location = new Point(btnNone.Left - btnAll.Width - (int)(6 * sf), btnAll.Top);
+            btnInvert.Location = new Point(txtFilter.Left - gap - btnInvert.Width, rowTop);
+            btnNone.Location = new Point(btnInvert.Left - (int)(6 * sf) - btnNone.Width, rowTop);
+            btnAll.Location = new Point(btnNone.Left - (int)(6 * sf) - btnAll.Width, rowTop);
+            if (btnAll.Left < left)
+            {
+                btnAll.Left = left;
+                btnNone.Left = btnAll.Right + (int)(6 * sf);
+                btnInvert.Left = btnNone.Right + (int)(6 * sf);
+                txtFilter.Left = btnInvert.Right + gap;
+                txtFilter.Width = Math.Max((int)(90 * sf), lblCount.Left - gap - txtFilter.Left);
+            }
 
             int top = Math.Max(btnAll.Bottom, txtFilter.Bottom) + (int)(10 * sf);
             int bottomBarH = (int)(54 * sf);
