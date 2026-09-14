@@ -23,7 +23,8 @@ namespace WallpaperChanger
         private Button btnSave;
         private Label lblStatus;
         private GroupBox gbSource;
-        private GroupBox gbSettings;
+        private GroupBox gbRotate;
+        private GroupBox gbOther;
         private Label lblStyle;
         private Label lblInterval;
         private Label lblHotkey;
@@ -68,8 +69,19 @@ namespace WallpaperChanger
         private readonly List<string> forward = new List<string>();
         private int lastTotal;   // image count of the most recent scan, for the redo status line
 
-        public MainForm()
+        // Set when the process was launched by the Startup shortcut: the
+        // window stays in the tray so booting the machine does not drop a
+        // dialog in the middle of the screen.
+        private readonly bool startHidden;
+        private bool allowVisible;
+
+        public MainForm() : this(false)
         {
+        }
+
+        public MainForm(bool startHidden)
+        {
+            this.startHidden = startHidden;
             Text = "WallpaperChanger v" + Application.ProductVersion;
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -80,7 +92,7 @@ namespace WallpaperChanger
             // so the design basis must be assigned AFTER the mode.
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
-            ClientSize = new Size(480, 560);
+            ClientSize = new Size(480, 608);
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = SystemColors.Control;
 
@@ -171,58 +183,64 @@ namespace WallpaperChanger
             btnManualPick.Click += delegate { OpenManualPicker(); };
             Controls.Add(btnManualPick);
 
-            gbSettings = new GroupBox();
-            gbSettings.SetBounds(12, 226, 456, 232);
-            Controls.Add(gbSettings);
+            gbRotate = new GroupBox();
+            gbRotate.SetBounds(12, 226, 456, 170);
+            Controls.Add(gbRotate);
 
             lblStyle = new Label();
             lblStyle.SetBounds(15, 28, 74, 22);
-            gbSettings.Controls.Add(lblStyle);
+            gbRotate.Controls.Add(lblStyle);
 
             cmbStyle = new ComboBox();
             cmbStyle.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbStyle.SetBounds(92, 25, 170, 25);
             cmbStyle.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; RestartTimer(); };
-            gbSettings.Controls.Add(cmbStyle);
+            gbRotate.Controls.Add(cmbStyle);
 
             lblInterval = new Label();
             lblInterval.SetBounds(15, 62, 74, 22);
-            gbSettings.Controls.Add(lblInterval);
+            gbRotate.Controls.Add(lblInterval);
 
             cmbInterval = new ComboBox();
             cmbInterval.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbInterval.SetBounds(92, 59, 170, 25);
             cmbInterval.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; RestartTimer(); };
-            gbSettings.Controls.Add(cmbInterval);
+            gbRotate.Controls.Add(cmbInterval);
 
             chkRandom = new CheckBox();
             chkRandom.SetBounds(15, 96, 220, 22);
             chkRandom.Checked = true;
             chkRandom.CheckedChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; };
-            gbSettings.Controls.Add(chkRandom);
+            gbRotate.Controls.Add(chkRandom);
 
             lblHotkey = new Label();
             lblHotkey.SetBounds(15, 133, 52, 22);
-            gbSettings.Controls.Add(lblHotkey);
+            gbRotate.Controls.Add(lblHotkey);
 
             cmbHotkey = new ComboBox();
             cmbHotkey.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbHotkey.SetBounds(67, 129, 128, 25);
             cmbHotkey.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; ApplyHotkey(); };
-            gbSettings.Controls.Add(cmbHotkey);
+            gbRotate.Controls.Add(cmbHotkey);
 
             lblHotkeyPrev = new Label();
             lblHotkeyPrev.SetBounds(202, 133, 52, 22);
-            gbSettings.Controls.Add(lblHotkeyPrev);
+            gbRotate.Controls.Add(lblHotkeyPrev);
 
             cmbHotkeyPrev = new ComboBox();
             cmbHotkeyPrev.DropDownStyle = ComboBoxStyle.DropDownList;
             cmbHotkeyPrev.SetBounds(254, 129, 150, 25);
             cmbHotkeyPrev.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; ApplyHotkey(); };
-            gbSettings.Controls.Add(cmbHotkeyPrev);
+            gbRotate.Controls.Add(cmbHotkeyPrev);
+
+            // Everything that is not about rotation lives in its own box:
+            // starting with Windows and the interface language.
+            gbOther = new GroupBox();
+            gbOther.SetBounds(12, 404, 456, 96);
+            Controls.Add(gbOther);
 
             chkAutoStart = new CheckBox();
-            chkAutoStart.SetBounds(15, 164, 340, 22);
+            chkAutoStart.SetBounds(15, 26, 426, 22);
             chkAutoStart.CheckedChanged += delegate
             {
                 if (loadingUi) return;
@@ -230,19 +248,19 @@ namespace WallpaperChanger
                 dirty = true;
                 AutoStartHelper.SetAutoStart(Config.AutoStart);
             };
-            gbSettings.Controls.Add(chkAutoStart);
+            gbOther.Controls.Add(chkAutoStart);
 
             // UI language selector: native names (中文 / English / 日本語),
             // applied immediately and persisted at once.
             lblLang = new Label();
             lblLang.AutoSize = true;
-            lblLang.SetBounds(15, 199, 0, 22);
-            gbSettings.Controls.Add(lblLang);
+            lblLang.SetBounds(15, 59, 0, 22);
+            gbOther.Controls.Add(lblLang);
             lblLang.Text = Loc.T("main.settings.language");
 
             cmbLang = new ComboBox();
             cmbLang.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbLang.SetBounds(110, 193, 170, 25);
+            cmbLang.SetBounds(110, 55, 170, 25);
             cmbLang.Items.AddRange(Loc.LanguageDisplayNames);
             // Leave "no selection" here: the real index comes from the saved
             // language in SyncLanguageCombo(). Selecting 0 unconditionally made
@@ -254,20 +272,20 @@ namespace WallpaperChanger
                 if (i < 0 || i >= Loc.LanguageCodes.Length) return;
                 ChangeLanguage(Loc.LanguageCodes[i]);
             };
-            gbSettings.Controls.Add(cmbLang);
+            gbOther.Controls.Add(cmbLang);
 
             btnNext = new Button();
-            btnNext.SetBounds(118, 466, 100, 32);
+            btnNext.SetBounds(118, 512, 100, 32);
             btnNext.Click += delegate { NextWallpaper(); };
             Controls.Add(btnNext);
 
             btnPrev = new Button();
-            btnPrev.SetBounds(12, 466, 100, 32);
+            btnPrev.SetBounds(12, 512, 100, 32);
             btnPrev.Click += delegate { PrevWallpaper(); };
             Controls.Add(btnPrev);
 
             btnSave = new Button();
-            btnSave.SetBounds(224, 466, 100, 32);
+            btnSave.SetBounds(224, 512, 100, 32);
             btnSave.Click += delegate
             {
                 SaveFromUi();
@@ -278,12 +296,12 @@ namespace WallpaperChanger
             Controls.Add(btnSave);
 
             btnHelp = new Button();
-            btnHelp.SetBounds(330, 466, 100, 32);
+            btnHelp.SetBounds(330, 512, 100, 32);
             btnHelp.Click += delegate { new HelpForm().ShowDialog(this); };
             Controls.Add(btnHelp);
 
             lblStatus = new Label();
-            lblStatus.SetBounds(12, 508, 456, 44);
+            lblStatus.SetBounds(12, 554, 456, 44);
             lblStatus.ForeColor = Color.FromArgb(0, 90, 158);
             Controls.Add(lblStatus);
         }
@@ -297,12 +315,13 @@ namespace WallpaperChanger
             gbSource.Text = Loc.T("main.source.group");
             btnSources.Text = Loc.T("main.source.manage");
             RefreshManualPickText();
-            gbSettings.Text = Loc.T("main.settings.group");
+            gbRotate.Text = Loc.T("main.settings.group");
             lblStyle.Text = Loc.T("main.settings.style");
             lblInterval.Text = Loc.T("main.settings.interval");
             chkRandom.Text = Loc.T("main.settings.random");
             lblHotkey.Text = Loc.T("main.settings.next");
             lblHotkeyPrev.Text = Loc.T("main.settings.prev");
+            gbOther.Text = Loc.T("main.other.group");
             chkAutoStart.Text = Loc.T("main.settings.autostart");
             lblLang.Text = Loc.T("main.settings.language");
             btnNext.Text = Loc.T("main.btn.next");
@@ -619,9 +638,32 @@ namespace WallpaperChanger
 
         private void ShowWindow()
         {
+            allowVisible = true;
             Show();
-            WindowState = FormWindowState.Normal;
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
             Activate();
+            BringToFront();
+        }
+
+        // A second launch of the exe asks the running copy to surface through
+        // a named event; this is what that request ends up calling.
+        public void ShowFromTray()
+        {
+            ShowWindow();
+        }
+
+        // Launched from the Startup shortcut: swallow the initial show request
+        // and live in the tray instead. The handle is still created so the
+        // timers, hotkeys and the show-request listener all work normally.
+        protected override void SetVisibleCore(bool value)
+        {
+            if (startHidden && !allowVisible)
+            {
+                if (!IsHandleCreated) CreateHandle();
+                base.SetVisibleCore(false);
+                return;
+            }
+            base.SetVisibleCore(value);
         }
 
         // Open the manual wallpaper picker (modal, on the main window's own

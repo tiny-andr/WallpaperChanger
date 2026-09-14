@@ -110,6 +110,7 @@ namespace WallpaperChanger
             m["main.manual.btn"] = "手动壁纸选择：已关闭";
             m["main.manual.btn.on"] = "手动壁纸选择：已选择 {0} 张壁纸";
             m["main.settings.group"] = "轮换设置";
+            m["main.other.group"] = "其他设置";
             m["main.settings.style"] = "壁纸样式:";
             m["main.settings.interval"] = "切换频率:";
             m["main.settings.random"] = "随机图片顺序";
@@ -225,6 +226,7 @@ namespace WallpaperChanger
             m["main.manual.btn"] = "Manual wallpaper selection: off";
             m["main.manual.btn.on"] = "Manual wallpaper selection: {0} selected";
             m["main.settings.group"] = "Rotation settings";
+            m["main.other.group"] = "Other settings";
             m["main.settings.style"] = "Style:";
             m["main.settings.interval"] = "Interval:";
             m["main.settings.random"] = "Random order";
@@ -340,6 +342,7 @@ namespace WallpaperChanger
             m["main.manual.btn"] = "手動壁紙選択：オフ";
             m["main.manual.btn.on"] = "手動壁紙選択：{0} 枚を選択中";
             m["main.settings.group"] = "ローテーション設定";
+            m["main.other.group"] = "その他の設定";
             m["main.settings.style"] = "表示スタイル:";
             m["main.settings.interval"] = "切り替え間隔:";
             m["main.settings.random"] = "ランダム順序";
@@ -469,6 +472,7 @@ namespace WallpaperChanger
                 new HelpLine(1, "■ 保存与后台运行"),
                 new HelpLine(0, "  • 修改任意设置后，请点击\"保存设置\"按钮，才会写入配置文件。"),
                 new HelpLine(0, "  • 关闭窗口只是最小化到托盘，程序仍在后台轮换；右键托盘图标可暂停 / 退出。"),
+                new HelpLine(0, "  • 勾选\"开机自动启动\"后，开机时会直接收进托盘、不弹出窗口；此后再次启动程序，只是把已有窗口唤到前台。"),
                 new HelpLine(0, "  • 左上角语言下拉可随时切换 中文 / English / 日本語，立即生效。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ 快捷键"),
@@ -513,6 +517,7 @@ namespace WallpaperChanger
                 new HelpLine(1, "■ Saving & background operation"),
                 new HelpLine(0, "  • After changing any setting, click \"Save settings\" to write it to the config file."),
                 new HelpLine(0, "  • Closing the window only minimizes to the tray; rotation keeps running. Right-click the tray icon to pause or exit."),
+                new HelpLine(0, "  • With \"Start with Windows\" on, booting starts the program in the tray with no window; launching it again just brings the existing window to the front."),
                 new HelpLine(0, "  • The language combo switches 中文 / English / 日本語 at any time, applied immediately."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ Hotkeys"),
@@ -557,6 +562,7 @@ namespace WallpaperChanger
                 new HelpLine(1, "■ 保存とバックグラウンド動作"),
                 new HelpLine(0, "  • 設定を変更したら「設定を保存」をクリックすると設定ファイルに書き込まれます。"),
                 new HelpLine(0, "  • ウィンドウを閉じてもトレイに最小化するだけで、ローテーションは継続します。トレイアイコンの右クリックで一時停止 / 終了できます。"),
+                new HelpLine(0, "  • 「Windows 起動時に自動開始」を有効にすると、起動時はウィンドウを出さずトレイに入ります。もう一度起動すると既存のウィンドウが前面に表示されます。"),
                 new HelpLine(0, "  • 左上の言語ドロップダウンで 中文 / English / 日本語 をいつでも切り替えられます（即時反映）。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "■ ホットキー"),
