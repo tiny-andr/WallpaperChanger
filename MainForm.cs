@@ -12,6 +12,8 @@ namespace WallpaperChanger
         private Button btnSources;
         private Label lblSourceSummary;
         private Button btnHelp;
+        private Button btnTheme;
+        private ToolTip themeTip;
         private Button btnManualPick;
         private ComboBox cmbStyle;
         private ComboBox cmbInterval;
@@ -92,7 +94,7 @@ namespace WallpaperChanger
             // so the design basis must be assigned AFTER the mode.
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
-            ClientSize = new Size(480, 608);
+            ClientSize = new Size(480, 634);
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = SystemColors.Control;
 
@@ -109,6 +111,8 @@ namespace WallpaperChanger
             rotateTimer.Tick += delegate { AutoRotate(); };
 
             Config.Load();
+            Theme.Set(Config.ThemeMode);
+            ApplyTheme();
             Log.Write("config: hotkey=" + Config.Hotkey + ", folders=" + Config.Folders.Count
                 + ", disabled=" + Config.DisabledFolders.Count);
 
@@ -159,7 +163,7 @@ namespace WallpaperChanger
         private void BuildUi()
         {
             gbSource = new GroupBox();
-            gbSource.SetBounds(12, 12, 456, 168);
+            gbSource.SetBounds(12, 38, 456, 168);
             Controls.Add(gbSource);
 
             // One entry point into the source manager. The old inline list
@@ -172,19 +176,19 @@ namespace WallpaperChanger
 
             lblSourceSummary = new Label();
             lblSourceSummary.SetBounds(15, 96, 426, 56);
-            lblSourceSummary.ForeColor = Color.FromArgb(96, 96, 96);
+            lblSourceSummary.Tag = Theme.RoleMuted;
             gbSource.Controls.Add(lblSourceSummary);
 
             // Manual wallpaper picker: opens the selection dialog where the
             // user curates which wallpapers participate in switching. The
             // caption doubles as the state readout (off / N selected).
             btnManualPick = new Button();
-            btnManualPick.SetBounds(12, 186, 456, 32);
+            btnManualPick.SetBounds(12, 212, 456, 32);
             btnManualPick.Click += delegate { OpenManualPicker(); };
             Controls.Add(btnManualPick);
 
             gbRotate = new GroupBox();
-            gbRotate.SetBounds(12, 226, 456, 170);
+            gbRotate.SetBounds(12, 252, 456, 170);
             Controls.Add(gbRotate);
 
             lblStyle = new Label();
@@ -236,7 +240,7 @@ namespace WallpaperChanger
             // Everything that is not about rotation lives in its own box:
             // starting with Windows and the interface language.
             gbOther = new GroupBox();
-            gbOther.SetBounds(12, 404, 456, 96);
+            gbOther.SetBounds(12, 430, 456, 96);
             Controls.Add(gbOther);
 
             chkAutoStart = new CheckBox();
@@ -275,17 +279,17 @@ namespace WallpaperChanger
             gbOther.Controls.Add(cmbLang);
 
             btnNext = new Button();
-            btnNext.SetBounds(118, 512, 100, 32);
+            btnNext.SetBounds(118, 538, 100, 32);
             btnNext.Click += delegate { NextWallpaper(); };
             Controls.Add(btnNext);
 
             btnPrev = new Button();
-            btnPrev.SetBounds(12, 512, 100, 32);
+            btnPrev.SetBounds(12, 538, 100, 32);
             btnPrev.Click += delegate { PrevWallpaper(); };
             Controls.Add(btnPrev);
 
             btnSave = new Button();
-            btnSave.SetBounds(224, 512, 100, 32);
+            btnSave.SetBounds(224, 538, 100, 32);
             btnSave.Click += delegate
             {
                 SaveFromUi();
@@ -296,13 +300,26 @@ namespace WallpaperChanger
             Controls.Add(btnSave);
 
             btnHelp = new Button();
-            btnHelp.SetBounds(330, 512, 100, 32);
+            btnHelp.SetBounds(330, 538, 100, 32);
             btnHelp.Click += delegate { new HelpForm().ShowDialog(this); };
             Controls.Add(btnHelp);
 
+            // Theme switch: a 26x26 glyph in the top-right corner. It is
+            // deliberately tiny - the window is dense and this is a
+            // set-and-forget control, not a primary action.
+            btnTheme = new ThemeToggleButton();
+            btnTheme.SetBounds(442, 8, 26, 26);
+            btnTheme.Click += delegate { ToggleTheme(); };
+            Controls.Add(btnTheme);
+
+            themeTip = new ToolTip();
+            themeTip.AutoPopDelay = 6000;
+            themeTip.InitialDelay = 300;
+            themeTip.ReshowDelay = 200;
+
             lblStatus = new Label();
-            lblStatus.SetBounds(12, 554, 456, 44);
-            lblStatus.ForeColor = Color.FromArgb(0, 90, 158);
+            lblStatus.SetBounds(12, 580, 456, 44);
+            lblStatus.Tag = Theme.RoleAccentText;
             Controls.Add(lblStatus);
         }
 
@@ -328,6 +345,8 @@ namespace WallpaperChanger
             btnPrev.Text = Loc.T("main.btn.prev");
             btnSave.Text = Loc.T("main.btn.save");
             btnHelp.Text = Loc.T("main.btn.help");
+            if (themeTip != null && btnTheme != null)
+                themeTip.SetToolTip(btnTheme, Loc.T("main.theme.tip"));
             RefreshSourceSummary();
 
             SetComboItems(cmbStyle, Loc.StyleNames());
@@ -400,6 +419,28 @@ namespace WallpaperChanger
             Config.Save();
             SyncLanguageCombo();
             ApplyTexts();
+        }
+
+        // Flip the colour scheme and remember it right away - like the
+        // language, a theme click is an unambiguous one-click decision, so it
+        // does not wait for the save button.
+        private void ToggleTheme()
+        {
+            AppTheme next = Theme.IsDark ? AppTheme.Light : AppTheme.Dark;
+            Theme.Set(next);
+            Config.ThemeMode = next;
+            Config.Save();
+            ApplyTheme();
+        }
+
+        // Repaint this window (and the tray menu) from the current palette.
+        private void ApplyTheme()
+        {
+            Theme.ApplyTo(this);
+            Theme.ApplyMenuStrip(trayMenu);
+            Theme.SetTitleBar(this);
+            if (btnTheme != null) btnTheme.Invalidate();
+            Invalidate(true);
         }
 
         private void BuildTray()
@@ -1127,6 +1168,7 @@ namespace WallpaperChanger
             base.OnHandleCreated(e);
             Log.Write("ui: dpi=" + DeviceDpi + " scale=" + (DeviceDpi / 96f).ToString("0.00")
                 + " client=" + ClientSize.Width + "x" + ClientSize.Height);
+            Theme.SetTitleBar(this);
             if (hotkeyManager != null) ApplyHotkey();
         }
 

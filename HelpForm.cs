@@ -33,7 +33,7 @@ namespace WallpaperChanger
             rtb.SetBounds(12, 12, 446, 402);
             rtb.ReadOnly = true;
             rtb.BorderStyle = BorderStyle.FixedSingle;
-            rtb.BackColor = Color.White;
+            rtb.BackColor = Theme.InputBack;
             rtb.ScrollBars = RichTextBoxScrollBars.Vertical;
             rtb.DetectUrls = false;
             // Make selection highlight vanish the moment the user clicks anywhere
@@ -56,6 +56,7 @@ namespace WallpaperChanger
             AcceptButton = btnClose;
 
             BuildContent();
+            Theme.ApplyTo(this);
 
             // After the dialog is fully shown, make sure no text is pre-selected
             // and the caret is on the Close button — not on the RichTextBox,
@@ -74,9 +75,11 @@ namespace WallpaperChanger
             Font titleFont = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
             Font headFont = new Font("Microsoft YaHei UI", 9.5F, FontStyle.Bold);
             Font bodyFont = new Font("Microsoft YaHei UI", 9F);
-            Color titleColor = Color.FromArgb(0, 90, 158);
-            Color headColor = Color.FromArgb(0, 60, 120);
-            Color bodyColor = Color.Black;
+            // The dark palette has to brighten these: the light-theme blues
+            // and plain black are unreadable on a dark surface.
+            Color titleColor = Theme.IsDark ? Theme.AccentText : Color.FromArgb(0, 90, 158);
+            Color headColor = Theme.IsDark ? Theme.AccentText : Color.FromArgb(0, 60, 120);
+            Color bodyColor = Theme.IsDark ? Theme.Fore : Color.Black;
 
             Emit("WallpaperChanger " + Application.ProductVersion + "  " + Loc.T("help.title"),
                 titleFont, titleColor, 0);

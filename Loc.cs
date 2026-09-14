@@ -122,6 +122,7 @@ namespace WallpaperChanger
             m["main.btn.prev"] = "上一张壁纸";
             m["main.btn.save"] = "保存设置";
             m["main.btn.help"] = "帮助";
+            m["main.theme.tip"] = "切换主题";
             m["main.hotkey.none"] = "无快捷键";
 
             m["status.saved"] = "设置已保存";
@@ -238,6 +239,7 @@ namespace WallpaperChanger
             m["main.btn.prev"] = "Previous wallpaper";
             m["main.btn.save"] = "Save settings";
             m["main.btn.help"] = "Help";
+            m["main.theme.tip"] = "Toggle theme";
             m["main.hotkey.none"] = "No hotkey";
 
             m["status.saved"] = "Settings saved";
@@ -354,6 +356,7 @@ namespace WallpaperChanger
             m["main.btn.prev"] = "前の壁紙";
             m["main.btn.save"] = "設定を保存";
             m["main.btn.help"] = "ヘルプ";
+            m["main.theme.tip"] = "テーマ切り替え";
             m["main.hotkey.none"] = "ホットキーなし";
 
             m["status.saved"] = "設定を保存しました";

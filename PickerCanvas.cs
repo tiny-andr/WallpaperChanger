@@ -49,9 +49,6 @@ namespace WallpaperChanger
     //     never triggers work in a tight loop.
     internal class PickerCanvas : ScrollableControl
     {
-        private static readonly Color Accent = Color.FromArgb(24, 95, 165);
-        private static readonly Color BorderIdle = Color.FromArgb(176, 176, 176);
-        private static readonly Color PlaceholderBg = Color.FromArgb(240, 240, 240);
         public const int DesignCols = 7;
         private const int DesignCellW = 258;
         private const int DesignCellImgH = 145;
@@ -112,7 +109,7 @@ namespace WallpaperChanger
                      ControlStyles.UserPaint |
                      ControlStyles.Opaque, true);
             AutoScroll = true;
-            BackColor = SystemColors.Control;
+            BackColor = Theme.IsDark ? Color.FromArgb(28, 28, 28) : SystemColors.Control;
             TabStop = false;
             labelFont = new Font("Microsoft YaHei UI", 9F);
             placeholderFont = new Font(labelFont, FontStyle.Regular);
@@ -418,16 +415,16 @@ namespace WallpaperChanger
             }
             else
             {
-                using (SolidBrush b = new SolidBrush(PlaceholderBg))
+                using (SolidBrush b = new SolidBrush(Theme.TilePlaceholder))
                 {
                     g.FillRectangle(b, imgRect);
                 }
-                TextRenderer.DrawText(g, "...", placeholderFont, imgRect, Color.Gray,
+                TextRenderer.DrawText(g, "...", placeholderFont, imgRect, Theme.ForeMuted,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             }
             if (sel)
             {
-                using (SolidBrush b = new SolidBrush(Color.FromArgb(26, Accent)))
+                using (SolidBrush b = new SolidBrush(Color.FromArgb(Theme.IsDark ? 64 : 30, Theme.Accent)))
                 {
                     g.FillRectangle(b, imgRect);
                 }
@@ -438,19 +435,19 @@ namespace WallpaperChanger
             if (cellLabelH > 0)
             {
                 Rectangle labelRect = new Rectangle(x, y + cellImgH, cellW, cellLabelH);
-                using (SolidBrush b = new SolidBrush(SystemColors.Control))
+                using (SolidBrush b = new SolidBrush(Theme.TileLabelBack))
                 {
                     g.FillRectangle(b, labelRect);
                 }
                 TextRenderer.DrawText(g, Path.GetFileName(path), labelFont,
                     new Rectangle(x + 3, y + cellImgH, cellW - 6, cellLabelH - 2),
-                    Color.FromArgb(70, 70, 70),
+                    Theme.TileLabelFore,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter |
                     TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine |
                     TextFormatFlags.NoPrefix);
             }
 
-            using (Pen pen = new Pen(sel ? Accent : BorderIdle, sel ? 2f : 1f))
+            using (Pen pen = new Pen(sel ? Theme.Accent : Theme.TileBorder, sel ? 2f : 1f))
             {
                 g.DrawRectangle(pen, x, y, cellW - 1,
                     cellImgH + cellLabelH - 1);
@@ -460,17 +457,17 @@ namespace WallpaperChanger
         private static void DrawCheckBox(Graphics g, int x, int y, bool on)
         {
             const int box = 18;
-            using (SolidBrush fill = new SolidBrush(on ? Accent : Color.White))
+            using (SolidBrush fill = new SolidBrush(on ? Theme.Accent : Theme.TileCheckBack))
             {
                 g.FillRectangle(fill, x, y, box, box);
             }
-            using (Pen border = new Pen(on ? Accent : Color.FromArgb(120, 120, 120), 1.5f))
+            using (Pen border = new Pen(on ? Theme.Accent : Theme.TileCheckBorder, 1.5f))
             {
                 g.DrawRectangle(border, x + 1, y + 1, box - 3, box - 3);
             }
             if (on)
             {
-                using (Pen tick = new Pen(Color.White, 2f))
+                using (Pen tick = new Pen(Theme.TileCheckTick, 2f))
                 {
                     g.DrawLine(tick, x + 4.5f, y + 9.5f, x + 7.5f, y + 12.5f);
                     g.DrawLine(tick, x + 7.5f, y + 12.5f, x + 13.5f, y + 5f);

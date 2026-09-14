@@ -71,6 +71,10 @@ namespace WallpaperChanger
         // yet" - the app then detects from the OS UI language on first run.
         public static string Language = "";
 
+        // Colour scheme: light is the plain system look, dark repaints every
+        // window from the palette in Theme.cs.
+        public static AppTheme ThemeMode = AppTheme.Light;
+
         // Manual wallpaper picker: the checked file set alone decides the mode.
         // When ManualPicked is non-empty, every forward switch (manual next,
         // auto timer) draws from scanned images that are also in ManualPicked;
@@ -200,6 +204,10 @@ namespace WallpaperChanger
                     v = v.Trim().ToLowerInvariant();
                     if (v == "zh" || v == "en" || v == "ja") Language = v;
                 }
+                if (single.TryGetValue("theme", out v))
+                {
+                    ThemeMode = Theme.FromConfig(v.Trim());
+                }
                 if (single.TryGetValue("manual_enabled", out v))
                 {
                     // Legacy: older configs used a master switch. It is ignored
@@ -244,6 +252,7 @@ namespace WallpaperChanger
                     sb.AppendLine("picked=" + picked);
                 }
                 sb.AppendLine("language=" + (Language.Length > 0 ? Language : "zh"));
+                sb.AppendLine("theme=" + Theme.ToConfig(ThemeMode));
                 sb.AppendLine("interval_minutes=" + IntervalMinutes);
                 sb.AppendLine("style=" + Style);
                 sb.AppendLine("random=" + (RandomOrder ? "1" : "0"));

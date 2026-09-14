@@ -23,9 +23,6 @@ namespace WallpaperChanger
     // saves, so the main window never sees a half-applied source list.
     public class SourceManagerForm : Form
     {
-        private static readonly Color Accent = Color.FromArgb(24, 95, 165);
-        private static readonly Color Warn = Color.FromArgb(176, 0, 0);
-
         private readonly Form ownerForm;
         private ListView lv;
         private ColumnHeader colState;
@@ -96,6 +93,7 @@ namespace WallpaperChanger
             BuildChrome();
             RebuildList();
             CancelButton = btnClose;
+            Theme.ApplyTo(this);
         }
 
         private void BuildChrome()
@@ -127,7 +125,7 @@ namespace WallpaperChanger
 
             lblHint = new Label();
             lblHint.Text = "";
-            lblHint.ForeColor = Color.FromArgb(96, 96, 96);
+            lblHint.Tag = Theme.RoleMuted;
             lblHint.SetBounds(14, 316, 632, 44);
             Controls.Add(lblHint);
 
@@ -160,8 +158,7 @@ namespace WallpaperChanger
             btnSave.Text = Loc.T("picker.save");
             btnSave.FlatStyle = FlatStyle.Flat;
             btnSave.FlatAppearance.BorderSize = 0;
-            btnSave.BackColor = Accent;
-            btnSave.ForeColor = Color.White;
+            btnSave.Tag = Theme.RoleAccent;
             btnSave.Click += delegate { Save(); };
             Controls.Add(btnSave);
 
@@ -288,9 +285,9 @@ namespace WallpaperChanger
             int n = -1;
             bool known = counts.TryGetValue(folder, out n);
             Color row;
-            if (!on) row = Color.Gray;
-            else if (known && n < 0) row = Warn;
-            else row = SystemColors.ControlText;
+            if (!on) row = Theme.ForeMuted;
+            else if (known && n < 0) row = Theme.Warn;
+            else row = Theme.Fore;
             it.ForeColor = row;
         }
 

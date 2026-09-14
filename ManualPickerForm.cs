@@ -17,8 +17,6 @@ namespace WallpaperChanger
     // raises TileToggled and the form keeps Config + ini state in sync.
     public class ManualPickerForm : Form
     {
-        private static readonly Color Accent = Color.FromArgb(24, 95, 165);
-
         private readonly Form ownerForm;
         private Button btnAll;
         private Button btnNone;
@@ -80,6 +78,7 @@ namespace WallpaperChanger
 
             BuildChrome();
             CancelButton = btnSave;
+            Theme.ApplyTo(this);
         }
 
         private void BuildChrome()
@@ -133,7 +132,7 @@ namespace WallpaperChanger
 
             lblPlaceholder = new Label();
             lblPlaceholder.Text = Loc.T("picker.filter.hint");
-            lblPlaceholder.ForeColor = Color.Gray;
+            lblPlaceholder.Tag = Theme.RoleMuted;
             lblPlaceholder.AutoSize = false;
             lblPlaceholder.SetBounds(0, 15, 280, 22);
             lblPlaceholder.Click += delegate { txtFilter.Focus(); };
@@ -143,7 +142,7 @@ namespace WallpaperChanger
             lblCount.Text = Loc.F("picker.count", 0, 0);
             lblCount.AutoSize = false;
             lblCount.TextAlign = ContentAlignment.MiddleRight;
-            lblCount.ForeColor = Accent;
+            lblCount.Tag = Theme.RoleAccentText;
             lblCount.SetBounds(0, 12, 150, 26);
             Controls.Add(lblCount);
 
@@ -154,13 +153,13 @@ namespace WallpaperChanger
 
             lblGridInfo = new Label();
             lblGridInfo.Text = "";
-            lblGridInfo.ForeColor = Color.Gray;
+            lblGridInfo.Tag = Theme.RoleMuted;
             lblGridInfo.TextAlign = ContentAlignment.MiddleCenter;
             Controls.Add(lblGridInfo);
 
             lblBottomHint = new Label();
             lblBottomHint.Text = "";
-            lblBottomHint.ForeColor = Color.FromArgb(96, 96, 96);
+            lblBottomHint.Tag = Theme.RoleMuted;
             lblBottomHint.AutoEllipsis = true;
             lblBottomHint.SetBounds(16, 0, 600, 22);
             Controls.Add(lblBottomHint);
@@ -170,8 +169,7 @@ namespace WallpaperChanger
             btnSave.Text = Loc.T("picker.saveclose");
             btnSave.FlatStyle = FlatStyle.Flat;
             btnSave.FlatAppearance.BorderSize = 0;
-            btnSave.BackColor = Accent;
-            btnSave.ForeColor = Color.White;
+            btnSave.Tag = Theme.RoleAccent;
             btnSave.SetBounds(0, 0, 108, 34);
             btnSave.Click += delegate { SaveAndClose(); };
             Controls.Add(btnSave);
