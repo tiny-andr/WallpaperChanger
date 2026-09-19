@@ -2074,13 +2074,16 @@ namespace WallpaperChanger
             closeBtn = new WindowBtn(IconKind.Close, true);
             maxBtn = new WindowBtn(IconKind.Maximize, false);
             minBtn = new WindowBtn(IconKind.Minimize, false);
+            // There is no help button: the app has no help window any more
+            // ("顶部的帮助按钮去掉。程序没有帮助了"). The event stays so a host
+            // that wants to bring it back does not have to change this class.
             helpBtn = new FlatButton();
             helpBtn.Kind = BtnKind.Ghost;
             helpBtn.Compact = true;
             helpBtn.Height = Theme.BtnSmallH;
+            helpBtn.Visible = false;
             helpBtn.Click += delegate { EventHandler h = HelpClicked; if (h != null) h(this, EventArgs.Empty); };
 
-            Controls.Add(helpBtn);
             Controls.Add(minBtn);
             Controls.Add(maxBtn);
             Controls.Add(closeBtn);
@@ -2174,12 +2177,17 @@ namespace WallpaperChanger
                 minBtn.SetBounds(Width - bs * 2, 0, bs, h);
             }
 
-            Font f = Theme.UiFont(this, Theme.FsSub);
-            int tw = string.IsNullOrEmpty(helpBtn.Text) ? 0
-                : TextRenderer.MeasureText(helpBtn.Text, f).Width + Gfx.S(this, 20);
-            int rightEdge = hasMaxButton ? bs * 3 : bs * 2;
-            helpBtn.SetBounds(Math.Max(0, Width - rightEdge - Gfx.S(this, 10) - tw),
-                (Height - Gfx.S(this, Theme.BtnSmallH)) / 2, tw, Gfx.S(this, Theme.BtnSmallH));
+            // The help button is gone; the window buttons now run to the left
+            // edge of the caption area with nothing between them and the title.
+            if (helpBtn.Visible)
+            {
+                Font f = Theme.UiFont(this, Theme.FsSub);
+                int tw = string.IsNullOrEmpty(helpBtn.Text) ? 0
+                    : TextRenderer.MeasureText(helpBtn.Text, f).Width + Gfx.S(this, 20);
+                int rightEdge = hasMaxButton ? bs * 3 : bs * 2;
+                helpBtn.SetBounds(Math.Max(0, Width - rightEdge - Gfx.S(this, 10) - tw),
+                    (Height - Gfx.S(this, Theme.BtnSmallH)) / 2, tw, Gfx.S(this, Theme.BtnSmallH));
+            }
         }
 
         // Dragging is handed to the system's caption loop, which is what buys
@@ -2728,21 +2736,37 @@ namespace WallpaperChanger
     // history + forward, which is why the rows are not a simple list: the
     // current entry sits in the middle, entries above it are redo targets
     // ("restorable") and entries below are what has already been seen.
+    // The switch history, as a horizontal filmstrip of thumbnails.
+    //
+    // It used to be a vertical list of rows: a 52x29 thumbnail, the file name
+    // and a meta line per row, three rows tall. The user's note was that this
+    // wastes the space - the images are what the card is about, the names are
+    // noise - so the rows became 16:9 tiles with the picture filling them, the
+    // current one carrying a plane and an accent border, and up to five of them
+    // side by side.
+    //
+    // The public surface is unchanged (SetRows / PreferredHeight /
+    // ItemClicked), so the card's sizing rules and the host's row mapping keep
+    // working.
     internal class HistoryList : Control, IThemed
     {
-        private string[] names = new string[0];
-        private string[] metas = new string[0];
-        private int currentIndex = -1;
-        private string currentTag = "";
-        private string undoableTag = "";
-        private string backTag = "";
-        private string emptyText = "";
+        private const int MaxTiles = 5;
+        private const int GapPx = 8;
+        private const int PadPx = 6;
+
         private Image[] thumbs = new Image[0];
+        private int currentIndex = -1;
+        private string emptyText = "";
         private int hotIndex = -1;
-        private int rowH = 47;
-        private readonly List<Rectangle> rows = new List<Rectangle>();
+        private readonly List<Rectangle> tiles = new List<Rectangle>();
 
         public event EventHandler ItemClicked;
+
+        // Kept so the host can still label states elsewhere; the strip itself
+        // draws no text.
+        public string CurrentTag = "";
+        public string UndoableTag = "";
+        public string BackTag = "";
 
         public HistoryList()
         {
@@ -2751,42 +2775,17 @@ namespace WallpaperChanger
             BackColor = Theme.Surface;
         }
 
-        public int RowH
-        {
-            get { return rowH; }
-            set { rowH = Math.Max(1, value); Relayout(); Invalidate(); }
-        }
-
-        public string CurrentTag
-        {
-            get { return currentTag; }
-            set { currentTag = value ?? ""; Invalidate(); }
-        }
-
-        public string UndoableTag
-        {
-            get { return undoableTag; }
-            set { undoableTag = value ?? ""; Invalidate(); }
-        }
-
-        public string BackTag
-        {
-            get { return backTag; }
-            set { backTag = value ?? ""; Invalidate(); }
-        }
-
         public string EmptyText
         {
             get { return emptyText; }
             set { emptyText = value ?? ""; Invalidate(); }
         }
 
-        // Entries in display order (newest first). currentIndex is a position
-        // in this same array; rows after it are redo targets.
+        // Entries in display order (newest first); current is a position in the
+        // same array. Names and metas are still accepted - the host builds them
+        // for the click mapping - but the tiles show only the pictures.
         public void SetRows(string[] displayNames, string[] displayMetas, Image[] displayThumbs, int current)
         {
-            names = displayNames ?? new string[0];
-            metas = displayMetas ?? new string[0];
             thumbs = displayThumbs ?? new Image[0];
             currentIndex = current;
             hotIndex = -1;
@@ -2794,10 +2793,17 @@ namespace WallpaperChanger
             Invalidate();
         }
 
-        // Height needed to show every row, capped by the caller's card.
+        // Height one row of tiles needs at this width, plus the strip's padding.
         public int PreferredHeight
         {
-            get { return names.Length * Gfx.S(this, rowH); }
+            get { return TileH() + PadPx * 2; }
+        }
+
+        private int TileH()
+        {
+            int w = TileW();
+            // 16:9, the shape of the pictures themselves.
+            return Math.Max(Gfx.S(this, 24), (int)Math.Round(w * 9.0 / 16.0));
         }
 
         public void ApplyTheme()
@@ -2813,21 +2819,38 @@ namespace WallpaperChanger
             Relayout();
         }
 
+        private int Count { get { return Math.Min(MaxTiles, thumbs.Length); } }
+
+        // A tile never grows past this. Without a cap a one-entry history made
+        // its single tile as wide as the card, which is a 380px-tall picture in
+        // a 668px window.
+        private const int MaxTileW = 168;
+
+        private int TileW()
+        {
+            int n = Math.Max(1, Count);
+            int inner = Math.Max(0, Width - PadPx * 2 - GapPx * (n - 1));
+            return Math.Max(Gfx.S(this, 24), Math.Min(Gfx.S(this, MaxTileW), inner / n));
+        }
+
         private void Relayout()
         {
-            rows.Clear();
-            int h = Gfx.S(this, rowH);
-            for (int i = 0; i < names.Length; i++)
+            tiles.Clear();
+            int n = Count;
+            if (n == 0) return;
+            int w = TileW();
+            int h = TileH();
+            for (int i = 0; i < n; i++)
             {
-                rows.Add(new Rectangle(0, i * h, Width, h));
+                tiles.Add(new Rectangle(PadPx + i * (w + GapPx), PadPx, w, h));
             }
         }
 
         private int HitTest(Point p)
         {
-            for (int i = 0; i < rows.Count; i++)
+            for (int i = 0; i < tiles.Count; i++)
             {
-                if (rows[i].Contains(p)) return i;
+                if (tiles[i].Contains(p)) return i;
             }
             return -1;
         }
@@ -2851,19 +2874,17 @@ namespace WallpaperChanger
             Invalidate();
         }
 
-        protected override void OnMouseDown(MouseEventArgs e)
-        {
-            base.OnMouseDown(e);
-            int i = HitTest(e.Location);
-            if (i < 0) return;
-            pressedIndex = i;
-        }
-
         private int pressedIndex = -1;
 
         // Row index passed with the last ItemClicked (a display index, not a
         // timeline index - the host owns that mapping).
         public int ClickedIndex { get; private set; }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            pressedIndex = HitTest(e.Location);
+        }
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
@@ -2882,101 +2903,68 @@ namespace WallpaperChanger
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent != null ? Parent.BackColor : Theme.Surface);
 
-            if (names.Length == 0)
+            if (Count == 0)
             {
                 if (emptyText.Length > 0)
                 {
                     Gfx.Text(g, emptyText, Theme.UiFont(this, Theme.FsSub), Theme.ForeMuted,
-                        new Rectangle(Gfx.S(this, 10), 0, Math.Max(0, Width - Gfx.S(this, 20)),
-                            Gfx.S(this, rowH)), Gfx.LeftMid);
+                        new Rectangle(Gfx.S(this, 4), 0, Math.Max(0, Width - Gfx.S(this, 8)),
+                            Math.Max(Gfx.S(this, 28), Height)),
+                        Gfx.LeftMid);
                 }
                 return;
             }
 
-            Font fn = Theme.UiFont(this, Theme.FsBodySm);
-            Font fnBold = Theme.UiFont(Theme.FsBodySm, Theme.WeightSemiBold, DeviceDpi);
-            Font fm = Theme.MonoFont(this, Theme.FsMono);
-            Font ff = Theme.UiFont(this, Theme.FsCap);
-            float rad = Gfx.S(this, 8);
-
-            for (int i = 0; i < rows.Count && i < names.Length; i++)
+            float rad = Gfx.S(this, Theme.RadTile);
+            for (int i = 0; i < tiles.Count && i < thumbs.Length; i++)
             {
-                Rectangle rc = rows[i];
+                Rectangle rc = tiles[i];
                 bool cur = i == currentIndex;
-                bool future = currentIndex >= 0 && i < currentIndex;
-                bool hot = i == hotIndex;
+                RectangleF rr = new RectangleF(rc.X, rc.Y, rc.Width, rc.Height);
 
-                if (cur)
-                {
-                    Gfx.FillRound(g, rc, rad, Theme.Selected);
-                }
-                else if (hot)
-                {
-                    Gfx.FillRound(g, rc, rad, Theme.Hover);
-                }
-
-                int padX = Gfx.S(this, 10);
-                int tw = Gfx.S(this, 52), th = Gfx.S(this, 29);
-                Rectangle tb = new Rectangle(rc.X + padX, rc.Y + (rc.Height - th) / 2, tw, th);
-                if (i < thumbs.Length && thumbs[i] != null)
+                // The picture fills the tile (object-fit: cover).
+                Image img = thumbs[i];
+                if (img != null)
                 {
                     GraphicsState st = g.Save();
-                    g.SetClip(tb);
-                    if (future) g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBilinear;
-                    g.DrawImage(thumbs[i], tb);
-                    g.Restore(st);
-                    if (future)
+                    using (GraphicsPath clip = Gfx.Round(rr, rad))
                     {
-                        // .hist-row.future img{opacity:.45} - dim towards the card.
-                        using (SolidBrush b = new SolidBrush(Color.FromArgb(140, Theme.Surface)))
-                        {
-                            g.FillRectangle(b, tb);
-                        }
+                        g.SetClip(clip);
+                        float scale = Math.Max((float)rc.Width / img.Width, (float)rc.Height / img.Height);
+                        float dw = img.Width * scale, dh = img.Height * scale;
+                        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                        g.DrawImage(img, rc.X + (rc.Width - dw) / 2f, rc.Y + (rc.Height - dh) / 2f, dw, dh);
                     }
-                    Gfx.StrokeRound(g, new RectangleF(tb.X + 0.5f, tb.Y + 0.5f, tb.Width - 1f, tb.Height - 1f),
-                        Gfx.S(this, 5), Theme.Border, 1f);
+                    g.Restore(st);
                 }
-
-                int textX = tb.Right + Gfx.S(this, 12);
-                int flagW = 0;
-                string flag = cur ? "" : (future ? backTag : "");
-                if (flag.Length > 0)
+                else
                 {
-                    flagW = TextRenderer.MeasureText(flag, ff).Width + Gfx.S(this, 10);
+                    Gfx.FillRound(g, rr, rad, Theme.TilePlaceholder);
                 }
-                int textW = Math.Max(0, rc.Right - padX - textX - flagW);
 
-                Font useName = cur ? fnBold : fn;
-                int lineH = Gfx.S(this, 18);
-                int blockTop = rc.Y + (rc.Height - lineH * 2) / 2;
-
-                // Pending rows are "restorable": their name drops to the
-                // secondary colour, which is exactly the case MutedStrong
-                // exists for. Seen/current rows keep full-strength fg.
-                Color nameInk = future ? Theme.MutedStrong : Theme.Fore;
-                bool cut;
-                string shown = Gfx.Fit(names[i], useName, Math.Max(0, textW - Gfx.S(this, 6)), out cut);
-                Gfx.Text(g, shown, useName, nameInk,
-                    new Rectangle(textX, blockTop, textW, lineH), Gfx.LeftMid);
-
-                string meta = i < metas.Length ? metas[i] : "";
-                if (meta.Length > 0)
+                // The current wallpaper keeps a plane and an accent ring, which
+                // is what the old list's "selected" row did.
+                if (cur)
                 {
-                    // .h-meta sits on --hover / --selected, where ForeMuted
-                    // measures 4.05:1 / 2.98:1 (light). MutedStrong holds
-                    // 7.05:1 / 5.18:1 across every state.
-                    Gfx.Text(g, meta, fm, Theme.MutedStrong,
-                        new Rectangle(textX, blockTop + lineH, textW, lineH), Gfx.Ellipsis(Gfx.LeftMid));
+                    using (SolidBrush b = new SolidBrush(Color.FromArgb(46, Theme.AccentText)))
+                    {
+                        using (GraphicsPath p = Gfx.Round(rr, rad)) g.FillPath(b, p);
+                    }
+                }
+                else if (i == hotIndex)
+                {
+                    using (SolidBrush b = new SolidBrush(Color.FromArgb(30, Theme.Fore)))
+                    {
+                        using (GraphicsPath p = Gfx.Round(rr, rad)) g.FillPath(b, p);
+                    }
                 }
 
-                if (flag.Length > 0)
-                {
-                    Gfx.Text(g, flag, ff, Theme.MutedStrong,
-                        new Rectangle(rc.Right - padX - flagW, rc.Y, flagW, rc.Height), Gfx.Ellipsis(Gfx.RightMid));
-                }
+                Gfx.StrokeRound(g, rr, rad,
+                    cur ? Theme.AccentText : Theme.Border, cur ? 2f : 1f);
             }
         }
     }
+
 
     // ---- preview thumbnail ----------------------------------------------
 

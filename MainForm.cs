@@ -312,7 +312,7 @@ namespace WallpaperChanger
             bar.Height = Theme.TitleBarH;
             bar.AppIcon = AppIconImage();
             bar.HasMaxButton = false;
-            bar.HelpClicked += delegate { new HelpForm().ShowDialog(this); };
+            // No help button and no help window: the app has neither any more.
 
             // Dock order is the reverse of the add order: the content host
             // takes whatever is left once the three edges are claimed.
@@ -464,16 +464,13 @@ namespace WallpaperChanger
             };
             stripRow.LaidOut += delegate { LayoutStrip(); };
 
-            // Switch history. The rows come from the history + forward model,
-            // not from a log of this run. The card's height follows the row
-            // count (see SizeHistoryCard): three rows is the cap here.
-            histCard = page.AddCard(Theme.CardPad * 2 + 47 * 3);
+            // Switch history: a horizontal filmstrip of up to five 16:9
+            // thumbnails, the current wallpaper ringed in accent. The rows come
+            // from the history + forward model, not from a log of this run, and
+            // the card is resized to the strip's own height (SizeHistoryCard).
+            histCard = page.AddCard(Theme.CardPad * 2 + Gfx.S(this, 150));
             histPage = page;
-            histList = histCard.AddChild(new HistoryList(), 0, 0, 684, 47 * 3);
-            histList.RowH = 47;
-            histList.CurrentTag = Loc.T("hist.cur");
-            histList.UndoableTag = Loc.T("hist.undoable");
-            histList.BackTag = Loc.T("hist.back");
+            histList = histCard.AddChild(new HistoryList(), 0, 0, 684, Gfx.S(this, 150));
             histList.EmptyText = Loc.T("hist.empty");
             histList.ItemClicked += delegate { OnHistoryRowClicked(); };
         }
@@ -634,6 +631,12 @@ namespace WallpaperChanger
             {
                 Config.Hotkey = keyNext.Value;
                 Config.Save();
+                // Show the binding that was just stored, from the config, in
+                // the same turn as the click. The report was "the key does not
+                // appear until I leave the page and come back", i.e. the button
+                // was left showing the capture prompt.
+                if (keyNext.Value >= 0) keyNext.Value = Config.Hotkey;
+                keyNext.Invalidate();
                 ApplyHotkey();
             };
 
@@ -648,6 +651,8 @@ namespace WallpaperChanger
             {
                 Config.HotkeyPrev = keyPrev.Value;
                 Config.Save();
+                if (keyPrev.Value >= 0) keyPrev.Value = Config.HotkeyPrev;
+                keyPrev.Invalidate();
                 ApplyHotkey();
             };
 
@@ -1793,7 +1798,7 @@ namespace WallpaperChanger
             return t;
         }
 
-        private int histHi = -1;   // timeline index shown in the first row
+        private int histHi = -1;   // timeline index shown in the first tile
 
         private void RebuildHistory()
         {
@@ -1805,55 +1810,55 @@ namespace WallpaperChanger
             {
                 histHi = -1;
                 histList.SetRows(null, null, null, -1);
-                SizeHistoryCard(1);   // one row's height for the "nothing yet" line
+                SizeHistoryCard(0);
                 return;
             }
 
-            int lo = Math.Max(0, cur - 2);
-            int hi = Math.Min(t.Count - 1, cur + 2);
-            int rows = hi - lo + 1;
-            string[] names = new string[rows];
-            string[] metas = new string[rows];
-            Image[] thumbs = new Image[rows];
+            // Newest first, up to five tiles: the current wallpaper and the four
+            // before it. The old list reached two either side of the current
+            // entry; a filmstrip reads backwards from "now".
+            int n = Math.Min(5, t.Count);
+            string[] names = new string[n];
+            string[] metas = new string[n];
+            Image[] thumbs = new Image[n];
             int dispCur = -1;
 
-            for (int r = 0; r < rows; r++)
+            for (int r = 0; r < n; r++)
             {
-                int ti = hi - r;                       // newest first
+                int ti = t.Count - 1 - r;              // newest first
                 string p = t[ti];
                 names[r] = Path.GetFileName(p);
-                string tag = ti == cur ? Loc.T("hist.cur")
-                    : (ti > cur ? Loc.T("hist.undoable") : Loc.T("hist.seen"));
-                metas[r] = tag + " · " + SourceOf(p);
-                thumbs[r] = ThumbCache.Get(p, 52, 29);
+                metas[r] = ti == cur ? Loc.T("hist.cur") : Loc.T("hist.seen");
+                thumbs[r] = ThumbCache.Get(p, 264, 148);
                 if (ti == cur) dispCur = r;
             }
 
-            histHi = hi;
+            histHi = t.Count - 1;
             histList.SetRows(names, metas, thumbs, dispCur);
-            SizeHistoryCard(rows);
+            SizeHistoryCard(n);
             RequestMissingThumbs(t);
         }
 
-        // The history card follows its row count (see the HistoryList case in
-        // CardPanel.ApplyPlacements): a fixed 148px card for three 47px rows
-        // sliced the last one off at the card's own bottom edge, and a fixed
-        // three-row card for an empty list left 110px of blank surface - the
-        // "空白行" a person points at. Three rows is the cap; RebuildHistory
-        // never hands the list more than that.
-        private void SizeHistoryCard(int rows)
+        // The history card follows the strip's own height: one row of 16:9 tiles
+        // plus its padding, and a shorter card when there is nothing to show.
+        private void SizeHistoryCard(int tiles)
         {
             if (histCard == null || histPage == null) return;
-            int show = Math.Max(1, Math.Min(3, rows));
-            histList.Height = Gfx.S(this, 47 * show);
-            histPage.SetCardHeight(histCard, Theme.CardPad * 2 + 47 * show);
+            int h = tiles > 0 ? histList.PreferredHeight : Gfx.S(this, 34);
+            histList.Height = h;
+            histPage.SetCardHeight(histCard, Theme.CardPad * 2 + h);
         }
 
         // Thumbnails are generated on a background thread; when one lands the
-        // list is rebuilt once. The set of already-requested paths keeps that
+        // strip is rebuilt once. The set of already-requested paths keeps that
         // from becoming a rebuild loop when a file cannot be decoded.
         private readonly HashSet<string> thumbRequested =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // The filmstrip's tile size, which is also the size its thumbnails are
+        // cached at. One constant so the two can never drift apart.
+        private const int HistThumbW = 264;
+        private const int HistThumbH = 148;
 
         private void RequestMissingThumbs(List<string> timeline)
         {
@@ -1861,7 +1866,7 @@ namespace WallpaperChanger
             foreach (string p in timeline)
             {
                 if (thumbRequested.Contains(p)) continue;
-                if (ThumbCache.Get(p, 52, 29) != null) continue;
+                if (ThumbCache.Get(p, HistThumbW, HistThumbH) != null) continue;
                 thumbRequested.Add(p);
                 missing.Add(p);
             }
@@ -1871,7 +1876,7 @@ namespace WallpaperChanger
             {
                 foreach (string p in missing)
                 {
-                    try { ThumbCache.Generate(p, 52, 29); }
+                    try { ThumbCache.Generate(p, HistThumbW, HistThumbH); }
                     catch { }
                 }
                 SafeUi(delegate { RebuildHistory(); });

@@ -82,6 +82,13 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /keytest
+            if (args.Length > 0 && args[0].Equals("/keytest", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunKeyCapTest());
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -386,6 +393,96 @@ namespace WallpaperChanger
                 Log.Write("probe error: " + ex.Message);
                 return 1;
             }
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /keytest
+        // Drives the hotkey capture button the way a click and a keypress do,
+        // and reports what the button shows and what the config holds after it.
+        // The report is "it stays on 按下组合键 until I leave the page and come
+        // back", which points at the capture either not ending or ending
+        // without a repaint.
+        private static int RunKeyCapTest()
+        {
+            int bad = 0;
+            try
+            {
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(40, 40);
+                form.Show();
+                Pump(600);
+
+                System.Reflection.MethodInfo showPage = typeof(MainForm).GetMethod("ShowPage",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (showPage != null) showPage.Invoke(form, new object[] { 2 });
+                Pump(500);
+
+                KeyCapButton cap = Field<KeyCapButton>(form, "keyPrev");
+                if (cap == null) { Log.Write("keytest: keyPrev not found"); return 1; }
+
+                int was = Config.HotkeyPrev;
+                Log.Write("keytest: before value=" + cap.Value + " capturing=" + cap.Capturing
+                    + " config=" + Config.HotkeyPrev + " visible=" + cap.Visible);
+
+                System.Reflection.MethodInfo down = typeof(System.Windows.Forms.Control).GetMethod("OnMouseDown",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                down.Invoke(cap, new object[] {
+                    new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, 5, 5, 0) });
+                Pump(200);
+                Log.Write("keytest: after click capturing=" + cap.Capturing
+                    + " focused=" + cap.Focused + " anyCapturing=" + KeyCapButton.AnyCapturing);
+
+                System.Reflection.MethodInfo kd = typeof(System.Windows.Forms.Control).GetMethod("OnKeyDown",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+                // Bind a key that is NOT the current one: re-setting the same
+                // value would pass even if the handler never ran.
+                int target = Config.HotkeyPrev == 5 ? 6 : 5;
+                down.Invoke(cap, new object[] {
+                    new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, 5, 5, 0) });
+                Pump(200);
+                kd.Invoke(cap, new object[] {
+                    new System.Windows.Forms.KeyEventArgs((System.Windows.Forms.Keys)(System.Windows.Forms.Keys.D0 + target)
+                        | System.Windows.Forms.Keys.Control) });
+                Pump(400);
+                Log.Write("keytest: pressed Ctrl+" + target + " -> value=" + cap.Value
+                    + " capturing=" + cap.Capturing + " config=" + Config.HotkeyPrev);
+                if (cap.Capturing) { bad++; Log.Write("keytest: STILL CAPTURING after the keypress"); }
+                if (cap.Value != target) { bad++; Log.Write("keytest: the button value did not take the key"); }
+                if (Config.HotkeyPrev != target) { bad++; Log.Write("keytest: the config did not take the key"); }
+
+                // And the button's label must read the new binding on the next
+                // paint. "It only shows up after I leave the page and come
+                // back" means this is where it goes wrong.
+                System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(cap.Width, cap.Height);
+                cap.DrawToBitmap(bmp, new System.Drawing.Rectangle(0, 0, cap.Width, cap.Height));
+                int accent = 0, ink = 0;
+                for (int y = 0; y < bmp.Height; y++)
+                {
+                    for (int x = 0; x < bmp.Width; x++)
+                    {
+                        System.Drawing.Color c = bmp.GetPixel(x, y);
+                        if (c.R < 150 && c.G < 150 && c.B < 150) ink++;
+                        // AccentSoft / AccentText are the capture state's colours.
+                        if (Theme.Current == AppTheme.Light
+                            ? (c.B > 200 && c.R < 120)
+                            : (c.B > 180 && c.R < 120)) accent++;
+                    }
+                }
+                Log.Write("keytest: paint after binding -> ink=" + ink + " accentish=" + accent
+                    + " (capture state would be mostly accent, a bound label is not)");
+                bmp.Dispose();
+
+                cap.Value = was;
+                form.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Write("keytest error: " + ex);
+                bad++;
+            }
+            Log.Write("keytest: failures=" + bad);
+            return bad == 0 ? 0 : 1;
         }
 
         private static T Field<T>(object o, string name) where T : class

@@ -109,9 +109,30 @@ namespace WallpaperChanger
             {
                 using (Image src = DecodeAny(path))
                 {
-                    if (src == null || src.Width < 8 || src.Height < 8) return null;
-                    return CoverCrop(src, w, h);
+                    if (src != null && src.Width >= 8 && src.Height >= 8)
+                    {
+                        return CoverCrop(src, w, h);
+                    }
                 }
+            }
+            catch { }
+
+            // GDI+ could not open it. Decode it through WIC at a reduced size
+            // when the aspect allows, and only then crop.
+            try
+            {
+                Bitmap scaled = DecodeAnyAtScale(path, w, h);
+                if (scaled == null) return null;
+                if (ScaleFits(scaled, w, h))
+                {
+                    // CoverCrop returns its own bitmap, so the decoded one is
+                    // ours to dispose - but only after the copy exists.
+                    try { return CoverCrop(scaled, w, h); }
+                    finally { scaled.Dispose(); }
+                }
+                // Wrong aspect for a crop-free downscale: hand back what WIC
+                // gave us rather than nothing.
+                return scaled;
             }
             catch { return null; }
         }
@@ -149,30 +170,90 @@ namespace WallpaperChanger
                     return CopyToArgb(tmp);
                 }
             }
-            catch { }
+            catch { return null; }
+        }
 
+        // ---- the WIC route, decoded at a reduced size ----------------------
+        //
+        // GDI+ cannot open every format in a wallpaper folder (WebP on older
+        // builds, some very large PNGs), so those go through WIC. The catch was
+        // that BitmapDecoder decoded them at FULL resolution and the copy then
+        // scaled that down: a 14 MB 4K PNG took seconds, and the preview card
+        // sat empty while its thumbnail was generated.
+        //
+        // BitmapImage with DecodePixelWidth lets WIC do the downscale while it
+        // decodes, which is the whole point of the API.
+
+        // True when the caller asked for a size that DecodeAnyAtScale can honour.
+        // The scaled route needs the target's aspect to match the thumbnail's,
+        // because a decode-time downscale cannot crop.
+        private static bool ScaleFits(Image src, int w, int h)
+        {
+            if (src == null || w < 8 || h < 8) return false;
+            double want = (double)w / h;
+            double got = (double)src.Width / src.Height;
+            return Math.Abs(want - got) <= 0.02;
+        }
+
+        private static Bitmap DecodeAnyAtScale(string path, int w, int h)
+        {
+            // WIC downscales to the requested width while decoding; a little
+            // headroom keeps the final high-quality crop honest.
+            Bitmap result = DecodeWicScaled(path, w * 2, h * 2);
+            if (result != null) return result;
+            return ToBitmap(DecodeAny(path));
+        }
+
+        private static Bitmap DecodeWicScaled(string path, int maxW, int maxH)
+        {
             try
             {
-                BitmapDecoder dec = BitmapDecoder.Create(new Uri(path),
-                    BitmapCreateOptions.IgnoreColorProfile,
-                    BitmapCacheOption.OnLoad);
-                if (dec == null || dec.Frames.Count == 0) return null;
-                BitmapSource frame = dec.Frames[0];
-                if (frame == null || frame.PixelWidth < 8 || frame.PixelHeight < 8) return null;
-                FormatConvertedBitmap bgra = new FormatConvertedBitmap(frame,
-                    System.Windows.Media.PixelFormats.Bgra32, null, 0);
-                Bitmap bmp = new Bitmap(bgra.PixelWidth, bgra.PixelHeight,
-                    PixelFormat.Format32bppArgb);
+                BitmapImage bi = new BitmapImage();
+                bi.BeginInit();
+                bi.UriSource = new Uri(path);
+                bi.DecodePixelWidth = Math.Max(8, maxW);
+                bi.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+                bi.CacheOption = BitmapCacheOption.OnLoad;
+                bi.EndInit();
+                if (bi.PixelWidth < 8 || bi.PixelHeight < 8) return null;
+                return ToBitmap(bi);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static Bitmap ToBitmap(BitmapSource frame)
+        {
+            if (frame == null) return null;
+            try
+            {
+                FormatConvertedBitmap bgra = frame.Format == System.Windows.Media.PixelFormats.Bgra32
+                    ? null
+                    : new FormatConvertedBitmap(frame, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+                BitmapSource src = bgra ?? (BitmapSource)frame;
+                Bitmap bmp = new Bitmap(src.PixelWidth, src.PixelHeight, PixelFormat.Format32bppArgb);
                 BitmapData data = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
                     ImageLockMode.WriteOnly, PixelFormat.Format32bppArgb);
                 try
                 {
-                    bgra.CopyPixels(new System.Windows.Int32Rect(0, 0, bgra.PixelWidth, bgra.PixelHeight),
-                        data.Scan0, data.Stride * bgra.PixelHeight, data.Stride);
+                    src.CopyPixels(new System.Windows.Int32Rect(0, 0, src.PixelWidth, src.PixelHeight),
+                        data.Scan0, data.Stride * src.PixelHeight, data.Stride);
                 }
                 finally { bmp.UnlockBits(data); }
                 return bmp;
             }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static Bitmap ToBitmap(Image img)
+        {
+            if (img == null) return null;
+            try { return CopyToArgb(img); }
             catch { return null; }
         }
 
