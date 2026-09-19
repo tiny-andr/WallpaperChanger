@@ -23,15 +23,14 @@ namespace WallpaperChanger
         private FlatButton btnPrev;
         private FlatButton btnNext;
         private KitLabel lblKbdHint;
-        private KitLabel lblStripStyle;
-        private KitLabel lblStripInterval;
-        private KitLabel lblStripOrder;
-        private FlatButton btnAdjust;
-        // The strip's ".k" captions and the card that owns the row, so the
-        // flexible-spacer layout can place the pairs from their text widths.
-        private CardPanel stripRow;
-        private readonly List<KitLabel> stripKeys = new List<KitLabel>();
+        // The overview settings row: the three rotation knobs as editable
+        // dropdowns, so changing them needs no separate page.
+        private KitDropdown cmbStyle;
+        private KitDropdown cmbInterval;
+        private KitDropdown cmbOrder;
         private HistoryList histList;
+        private CardPanel histCard;
+        private PageStack histPage;
         private readonly KitLabel[] factVal = new KitLabel[3];
         private readonly KitLabel[] factLab = new KitLabel[3];
 
@@ -48,11 +47,7 @@ namespace WallpaperChanger
         // list changes cannot write stale counts into the new rows.
         private int countGeneration;
 
-        // ---- rotate page ---------------------------------------------------
-        private StyleOptionGrid styleGrid;
-        private Label lblIvEcho;
-        private SegmentedControl segInterval;
-        private SegmentedControl segOrder;
+        // ---- hotkeys (live on the general page) ----------------------------
         private KitLabel lblHkNextName;
         private KitLabel lblHkPrevName;
         private KitLabel lblHkNext;
@@ -63,7 +58,7 @@ namespace WallpaperChanger
         // ---- general page --------------------------------------------------
         private ToggleSwitch swAutoStart;
         private SegmentedControl segTheme;
-        private ComboBox cmbLang;
+        private KitDropdown cmbLang;
         private KitLabel lblAppTitle;
         private KitLabel lblAppNote;
         private KitLabel lblCfgPath;
@@ -81,6 +76,13 @@ namespace WallpaperChanger
         private readonly HotkeyManager hotkeyManager;
 
         private System.Windows.Forms.Timer rotateTimer;
+        private System.Windows.Forms.Timer uiTick;
+        private System.Windows.Forms.Timer noticeTimer;
+
+        // When the running timer will fire next. A fixed point in time, so the
+        // displayed countdown counts DOWN to it instead of drifting every time
+        // the status line repaints.
+        private DateTime nextSwitchAt = DateTime.MinValue;
         private bool busy;
         private bool reallyExit;
         private bool trayNotified;
@@ -112,12 +114,18 @@ namespace WallpaperChanger
         // the window is sitting on it.
         private Rectangle normalBounds;
         private FormWindowState lastState = FormWindowState.Normal;
+        private bool unmaximizeQueued;
 
         // Set when the process was launched by the Startup shortcut: the
         // window stays in the tray so booting the machine does not drop a
         // dialog in the middle of the screen.
         private readonly bool startHidden;
         private bool allowVisible;
+
+        // Width of the single right-hand control column on the general page
+        // (theme segments / language dropdown). Both controls pin to the same
+        // right edge with the same width, so their left edges line up.
+        private const int LangColW = 200;
 
         public MainForm() : this(false)
         {
@@ -133,7 +141,11 @@ namespace WallpaperChanger
             // WM_NCCALCSIZE answers 0, so the client area covers the whole
             // window and the custom title bar owns the top 46px.
             FormBorderStyle = FormBorderStyle.None;
-            MaximizeBox = true;
+            // The layout is a fixed 680px-wide design; maximising it just
+            // stretches empty space and exposes every layout weakness. The
+            // one window that benefits from being big - the wallpaper picker
+            // - is its own dialog and stays resizable.
+            MaximizeBox = false;
             MinimizeBox = true;
             // High-DPI support: declare the 96 DPI design basis and let
             // WinForms scale the whole layout proportionally on any monitor.
@@ -169,7 +181,28 @@ namespace WallpaperChanger
             rotateTimer = new System.Windows.Forms.Timer();
             // Automatic rotation always advances to a fresh wallpaper (never
             // "redo"s a manual previous/next step).
-            rotateTimer.Tick += delegate { AutoRotate(); };
+            rotateTimer.Tick += delegate
+            {
+                nextSwitchAt = DateTime.Now + TimeSpan.FromMinutes(Config.IntervalMinutes);
+                AutoRotate();
+            };
+
+            // A one-second UI pulse. The "next switch at" readout is a point
+            // in time (nextSwitchAt), not "now + interval" - recomputing it
+            // from now on every repaint made the countdown freeze at whatever
+            // the last repaint happened to be, and any unrelated status
+            // change silently pushed the target into the future.
+            uiTick = new System.Windows.Forms.Timer();
+            uiTick.Interval = 1000;
+            uiTick.Tick += delegate { RefreshCountdown(); };
+            uiTick.Start();
+
+            // Footer notices are transient: long enough to read a sentence,
+            // short enough that a stale "no pictures" cannot greet the user
+            // ten minutes later.
+            noticeTimer = new System.Windows.Forms.Timer();
+            noticeTimer.Interval = 8000;
+            noticeTimer.Tick += delegate { ClearNotice(); };
 
             Config.Load();
             Theme.Set(Config.ThemeMode);
@@ -234,34 +267,54 @@ namespace WallpaperChanger
             BuildShell();
             BuildOverviewPage();
             BuildSourcesPage();
-            BuildRotatePage();
             BuildGeneralPage();
             ShowPage(0);
         }
 
         // ---- shell ---------------------------------------------------------
 
+        // The four chrome regions are laid out by hand against the REAL client
+        // rectangle, not docked. With WS_THICKFRAME kept alive (for the DWM
+        // shadow and snap) WinForms believes the client is 14px smaller than
+        // the area WM_NCCALCSIZE actually hands back, so a docked layout
+        // leaves an unpainted black strip along the right and bottom edges.
+        private void LayoutChrome()
+        {
+            // Handle creation itself fires WM_SIZE (WmCreate -> UpdateBounds ->
+            // OnResize) while bar/rail/footer/content are still null, so this
+            // guard has to cover both conditions, not just the handle.
+            if (!IsHandleCreated || bar == null || rail == null || footer == null || content == null) return;
+            RECT c;
+            GetClientRect(Handle, out c);
+            int w = c.Right - c.Left;
+            int h = c.Bottom - c.Top;
+            int barH = Gfx.S(this, Theme.TitleBarH);
+            int footH = Gfx.S(this, Theme.StatusBarH);
+            int railW = Gfx.S(this, Theme.RailW);
+            bar.SetBounds(0, 0, w, barH);
+            rail.SetBounds(0, barH, railW, Math.Max(0, h - barH - footH));
+            footer.SetBounds(0, Math.Max(barH, h - footH), w, Math.Min(footH, Math.Max(0, h - barH)));
+            content.SetBounds(railW, barH, Math.Max(0, w - railW), Math.Max(0, h - barH - footH));
+        }
+
         private void BuildShell()
         {
             content = new Panel();
-            content.Dock = DockStyle.Fill;
             content.BackColor = Theme.FormBack;
 
             rail = new NavRail();
-            rail.Dock = DockStyle.Left;
             rail.Width = Theme.RailW;
             rail.SelectedIndexChanged += delegate { ShowPage(rail.SelectedIndex); };
             rail.PauseClicked += delegate { TogglePause(); };
 
             footer = new StatusBar();
-            footer.Dock = DockStyle.Bottom;
             footer.Height = Theme.StatusBarH;
             footer.SaveClicked += delegate { SaveFromFooter(); };
 
             bar = new TitleBar();
-            bar.Dock = DockStyle.Top;
             bar.Height = Theme.TitleBarH;
             bar.AppIcon = AppIconImage();
+            bar.HasMaxButton = false;
             bar.HelpClicked += delegate { new HelpForm().ShowDialog(this); };
 
             // Dock order is the reverse of the add order: the content host
@@ -270,6 +323,11 @@ namespace WallpaperChanger
             Controls.Add(rail);
             Controls.Add(footer);
             Controls.Add(bar);
+
+            // The handle may already exist by now (it did once the crash log
+            // showed WM_SIZE arriving during WmCreate), so the first chrome
+            // layout has to happen here, not only in OnLoad/OnResize.
+            LayoutChrome();
         }
 
         private static Image AppIconImage()
@@ -362,30 +420,53 @@ namespace WallpaperChanger
 
             lblKbdHint = hero.AddChild(Txt(LabelStyle.Cap, true), rx, 174, rw, 18);
 
-            // Summary strip: the three settings that decide what gets shown,
-            // as a read-only echo of the rotate page.
-            //
-            // ".strip" in the prototype is a flex row - three key/value pairs
-            // separated by equal flexible spacers with the adjust button pinned
-            // to the right end. Fixed x positions cannot express that: they were
-            // laid out against a 684px body and ran straight past the card edge
-            // as soon as the window was a different width.
-            stripRow = page.AddCard(65);
+            // Settings row: the three rotation knobs as editable dropdowns.
+            // They used to be a read-only echo plus an "adjust" button that
+            // jumped to a dedicated rotate page - one page for three choices
+            // nobody needs to stare at. Changing them here writes straight to
+            // the config, exactly like every other control in this window.
+            stripRow = page.AddCard(74);
             stripRow.Pad = 13;
             stripRow.PadX = 16;
-            lblStripStyle = StripPair(stripRow, "ov.strip.style");
-            lblStripInterval = StripPair(stripRow, "ov.strip.interval");
-            lblStripOrder = StripPair(stripRow, "ov.strip.order");
-            btnAdjust = stripRow.AddChild(new FlatButton(), 0, 1, 94, Theme.BtnSmallH);
-            btnAdjust.Kind = BtnKind.Ghost;
-            btnAdjust.Compact = true;
-            btnAdjust.Click += delegate { ShowPage(2); };
+            BuildStripCombo(out cmbStyle, "ov.strip.style");
+            cmbStyle.Items = Loc.StyleNames();
+            cmbStyle.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
+            };
+
+            BuildStripCombo(out cmbInterval, "ov.strip.interval");
+            cmbInterval.Items = Loc.IntervalNames();
+            cmbInterval.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
+                RestartTimer();
+            };
+
+            BuildStripCombo(out cmbOrder, "ov.strip.order");
+            cmbOrder.Items = new string[] {
+                Loc.T("ov.order.random"), Loc.T("ov.order.inorder") };
+            cmbOrder.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
+            };
             stripRow.LaidOut += delegate { LayoutStrip(); };
 
             // Switch history. The rows come from the history + forward model,
-            // not from a log of this run.
-            CardPanel hist = page.AddCard(148);
-            histList = hist.AddChild(new HistoryList(), 0, 0, 684, 111);
+            // not from a log of this run. The card's height follows the row
+            // count (see SizeHistoryCard): three rows is the cap here.
+            histCard = page.AddCard(Theme.CardPad * 2 + 47 * 3);
+            histPage = page;
+            histList = histCard.AddChild(new HistoryList(), 0, 0, 684, 47 * 3);
             histList.RowH = 47;
             histList.CurrentTag = Loc.T("hist.cur");
             histList.UndoableTag = Loc.T("hist.undoable");
@@ -394,58 +475,38 @@ namespace WallpaperChanger
             histList.ItemClicked += delegate { OnHistoryRowClicked(); };
         }
 
-        // ".k" and ".v" are stacked directly: the design puts the caption on
-        // the first line of the body and the value right underneath it, with no
-        // extra gap between the two lines.
-        private KitLabel StripPair(CardPanel card, string key)
+        // ".k" caption above a dropdown, one column per knob.
+        private CardPanel stripRow;
+        private readonly List<KitLabel> stripKeys = new List<KitLabel>();
+        private readonly List<KitDropdown> stripCombos = new List<KitDropdown>();
+
+        private void BuildStripCombo(out KitDropdown box, string captionKey)
         {
-            KitLabel k = card.AddChild(Txt(LabelStyle.Cap, true), 0, 1, 180, 17);
-            k.Text = Loc.T(key);
+            KitLabel k = stripRow.AddChild(Txt(LabelStyle.Cap, true), 0, 1, 180, 17);
+            k.Text = Loc.T(captionKey);
             stripKeys.Add(k);
-            KitLabel v = card.AddChild(Txt(LabelStyle.BodyBold), 0, 18, 180, 20);
-            return v;
+            box = stripRow.AddChild(new KitDropdown(), 0, 18, 180, Theme.InputH);
+            stripCombos.Add(box);
         }
 
-        // Equal flexible spacers between the four items, exactly like the
-        // prototype's three "flex:1" spans.
+        // Three equal columns separated by equal gaps - the prototype's flex
+        // row, with each column holding one caption + one dropdown.
         private void LayoutStrip()
         {
-            if (stripRow == null || btnAdjust == null || stripKeys.Count < 3) return;
-            KitLabel[] vals = { lblStripStyle, lblStripInterval, lblStripOrder };
+            if (stripRow == null || stripCombos.Count < 3) return;
             Rectangle b = stripRow.Body;
             if (b.Width <= 0) return;
 
-            int[] pairW = new int[3];
-            int total = 0;
-            for (int i = 0; i < 3; i++)
-            {
-                int kw = TextW(stripKeys[i].Text, Theme.FsCap, FontStyle.Regular);
-                int vw = TextW(vals[i].Text, Theme.FsBodySm, FontStyle.Bold);
-                pairW[i] = Math.Max(kw, vw);
-                total += pairW[i];
-            }
-            // ".btn-sm{padding:0 11px}" around the label.
-            int btnW = TextW(btnAdjust.Text, Theme.FsSub, FontStyle.Regular)
-                + Gfx.S(this, 22);
-            total += btnW;
-
-            int slack = Math.Max(0, b.Width - total);
-            int gap = slack / 3;
-
+            int gap = Gfx.S(this, 16);
+            int colW = Math.Max(Gfx.S(this, 120), (b.Width - gap * 2) / 3);
             int x = b.Left;
             for (int i = 0; i < 3; i++)
             {
-                stripKeys[i].SetBounds(x, stripKeys[i].Top, pairW[i], stripKeys[i].Height);
-                vals[i].SetBounds(x, vals[i].Top, pairW[i], vals[i].Height);
-                x += pairW[i] + gap;
+                int w = Math.Min(colW, Math.Max(0, b.Right - x));
+                stripKeys[i].SetBounds(x, stripKeys[i].Top, w, stripKeys[i].Height);
+                stripCombos[i].SetBounds(x, stripCombos[i].Top, w, stripCombos[i].Height);
+                x += colW + gap;
             }
-            btnAdjust.SetBounds(b.Right - btnW, btnAdjust.Top, btnW, btnAdjust.Height);
-        }
-
-        private int TextW(string text, float px, FontStyle style)
-        {
-            if (string.IsNullOrEmpty(text)) return 0;
-            return TextRenderer.MeasureText(text, Theme.UiFont(px, style, DeviceDpi)).Width;
         }
 
         // ---- sources -------------------------------------------------------
@@ -499,65 +560,62 @@ namespace WallpaperChanger
             btnRecount.Click += delegate { StartSourceCounts(true); };
         }
 
-        // ---- rotate --------------------------------------------------------
+        // ---- general -------------------------------------------------------
 
-        private void BuildRotatePage()
+        private void BuildGeneralPage()
         {
-            PageStack page = NewPage("nav.rotate", "rot.page.note");
+            PageStack page = NewPage("nav.general", "gen.page.note");
 
-            CardPanel cardStyle = page.AddCard(490);
-            cardStyle.Title = Loc.T("ov.strip.style");
-            cardStyle.Note = Loc.T("rot.style.note");
+            CardPanel cardStart = page.AddCard(126);
+            cardStart.Title = Loc.T("gen.startup.title");
+            cardStart.Note = Loc.T("gen.startup.note");
 
-            styleGrid = cardStyle.AddChild(new StyleOptionGrid(), 0, 0, 684, 406);
-            styleGrid.Columns = 3;
-            styleGrid.CellH = 198;
-            styleGrid.Items = Loc.StyleNames();
-            styleGrid.SelectedIndexChanged += delegate
+            swAutoStart = cardStart.AddHeaderControl(new ToggleSwitch(), Theme.SwitchW, Theme.SwitchH);
+            swAutoStart.CheckedChanged += delegate
             {
                 if (loadingUi) return;
                 ApplyFromUi();
                 dirty = true;
                 RefreshDirty();
-                RestartTimer();
+                AutoStartHelper.SetAutoStart(Config.AutoStart);
             };
 
-            // The interval control wraps when it has to, so the card has to
-            // ask for the height the control will actually need.
-            SegmentedControl segIv = new SegmentedControl();
-            segIv.Items = Loc.IntervalNames();
-            int ivH = segIv.MeasureHeight(684);
+            cardStart.AddChild(new Rule(), 0, 0, 684, 1);
 
-            CardPanel cardInterval = page.AddCard(18 + 48 + ivH + 18);
-            cardInterval.Title = Loc.T("ov.strip.interval");
-            cardInterval.Note = Loc.T("rot.interval.note");
-            lblIvEcho = cardInterval.AddHeaderControl(new Label(), 180, 18);
-            lblIvEcho.Tag = Theme.RoleMuted;
-            lblIvEcho.TextAlign = ContentAlignment.MiddleRight;
+            lblAppTitle = cardStart.AddChild(Txt(LabelStyle.BodyBold), 0, 16, 440, 20);
+            lblAppNote = cardStart.AddChild(Txt(LabelStyle.CardNote, true), 0, 38, 440, 36);
+            lblAppNote.Wrap = true;
 
-            segInterval = cardInterval.AddChild(segIv, 0, 0, 684, ivH);
-            segInterval.SelectedIndexChanged += delegate
+            SegmentedControl segTh = new SegmentedControl();
+            segTh.Items = new string[] { Loc.T("gen.light"), Loc.T("gen.dark") };
+            // Pinned right at the same width and x as the language dropdown
+            // below it, so the card's right-hand controls line up in one
+            // column instead of the segmented pill ending where the dropdown
+            // starts.
+            segTheme = cardStart.AddRightChild(segTh, 24, LangColW, 34);
+            segTheme.SelectedIndexChanged += delegate
             {
                 if (loadingUi) return;
-                ApplyFromUi();
-                dirty = true;
-                RefreshDirty();
-                RestartTimer();
+                AppTheme want = segTheme.SelectedIndex == 1 ? AppTheme.Dark : AppTheme.Light;
+                if (want == Theme.Current) return;
+                SetThemeMode(want);
             };
 
-            SegmentedControl segOrd = new SegmentedControl();
-            segOrd.Items = new string[] { Loc.T("ov.order.random"), Loc.T("ov.order.inorder") };
+            CardPanel cardLang = page.AddCard(84);
+            cardLang.Title = Loc.T("gen.language.title");
+            cardLang.Note = Loc.T("gen.language.note");
 
-            CardPanel cardOrder = page.AddCard(84);
-            cardOrder.Title = Loc.T("rot.order.title");
-            cardOrder.Note = Loc.T("rot.order.note");
-            segOrder = cardOrder.AddHeaderControl(segOrd, 168, 34);
-            segOrder.SelectedIndexChanged += delegate
+            cmbLang = cardLang.AddHeaderControl(new KitDropdown(), LangColW, Theme.InputH);
+            cmbLang.Items = Loc.LanguageDisplayNames;
+            // Leave "no selection": the real index comes from the saved
+            // language in SyncLanguageCombo(). Selecting 0 unconditionally
+            // made the box read 中文 even when the UI started up in English.
+            cmbLang.SelectedIndexChanged += delegate
             {
                 if (loadingUi) return;
-                ApplyFromUi();
-                dirty = true;
-                RefreshDirty();
+                int i = cmbLang.SelectedIndex;
+                if (i < 0 || i >= Loc.LanguageCodes.Length) return;
+                ChangeLanguage(Loc.LanguageCodes[i]);
             };
 
             CardPanel cardHk = page.AddCard(184);
@@ -589,65 +647,6 @@ namespace WallpaperChanger
                 Config.Save();
                 ApplyHotkey();
             };
-        }
-
-        // ---- general -------------------------------------------------------
-
-        private void BuildGeneralPage()
-        {
-            PageStack page = NewPage("nav.general", "gen.page.note");
-
-            CardPanel cardStart = page.AddCard(162);
-            cardStart.Title = Loc.T("gen.startup.title");
-            cardStart.Note = Loc.T("gen.startup.note");
-
-            swAutoStart = cardStart.AddHeaderControl(new ToggleSwitch(), Theme.SwitchW, Theme.SwitchH);
-            swAutoStart.CheckedChanged += delegate
-            {
-                if (loadingUi) return;
-                ApplyFromUi();
-                dirty = true;
-                RefreshDirty();
-                AutoStartHelper.SetAutoStart(Config.AutoStart);
-            };
-
-            cardStart.AddChild(new Rule(), 0, 0, 684, 1);
-
-            lblAppTitle = cardStart.AddChild(Txt(LabelStyle.BodyBold), 0, 16, 440, 20);
-            lblAppNote = cardStart.AddChild(Txt(LabelStyle.CardNote, true), 0, 38, 440, 36);
-            lblAppNote.Wrap = true;
-
-            SegmentedControl segTh = new SegmentedControl();
-            segTh.Items = new string[] { Loc.T("gen.light"), Loc.T("gen.dark") };
-            // Pinned right rather than placed at x=484: that absolute spot only
-            // works while the card body is the design's 684 wide. On a narrow
-            // window the control was squeezed to 65px and the labels vanished.
-            segTheme = cardStart.AddRightChild(segTh, 24, 200, 34);
-            segTheme.SelectedIndexChanged += delegate
-            {
-                if (loadingUi) return;
-                AppTheme want = segTheme.SelectedIndex == 1 ? AppTheme.Dark : AppTheme.Light;
-                if (want == Theme.Current) return;
-                SetThemeMode(want);
-            };
-
-            CardPanel cardLang = page.AddCard(84);
-            cardLang.Title = Loc.T("gen.language.title");
-            cardLang.Note = Loc.T("gen.language.note");
-
-            cmbLang = cardLang.AddHeaderControl(new ComboBox(), 180, 30);
-            cmbLang.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbLang.Items.AddRange(Loc.LanguageDisplayNames);
-            // Leave "no selection": the real index comes from the saved
-            // language in SyncLanguageCombo(). Selecting 0 unconditionally
-            // made the box read 中文 even when the UI started up in English.
-            cmbLang.SelectedIndexChanged += delegate
-            {
-                if (loadingUi) return;
-                int i = cmbLang.SelectedIndex;
-                if (i < 0 || i >= Loc.LanguageCodes.Length) return;
-                ChangeLanguage(Loc.LanguageCodes[i]);
-            };
 
             CardPanel cardCfg = page.AddCard(156);
             cardCfg.Title = Loc.T("gen.config.title");
@@ -671,9 +670,9 @@ namespace WallpaperChanger
             // ---- shell
             rail.Items = new string[] {
                 Loc.T("nav.overview"), Loc.T("nav.sources"),
-                Loc.T("nav.rotate"), Loc.T("nav.general") };
+                Loc.T("nav.general") };
             rail.Icons = new IconKind[] {
-                IconKind.Grid, IconKind.Folder, IconKind.Rotate, IconKind.Gear };
+                IconKind.Grid, IconKind.Folder, IconKind.Gear };
             rail.PauseText = rotateTimer != null && !rotateTimer.Enabled
                 ? Loc.T("rail.resume") : Loc.T("rail.pause");
             rail.DotCaption = rotateTimer != null && rotateTimer.Enabled
@@ -691,7 +690,6 @@ namespace WallpaperChanger
             btnPrev.Text = Loc.T("ov.prev");
             btnNext.Text = Loc.T("ov.next");
             lblKbdHint.Text = KbdHintText();
-            btnAdjust.Text = Loc.T("ov.strip.adjust");
             string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
             for (int i = 0; i < 3; i++) factLab[i].Text = Loc.T(factKeys[i]);
             histList.CurrentTag = Loc.T("hist.cur");
@@ -713,10 +711,15 @@ namespace WallpaperChanger
             srcList.UnavailableText = Loc.T("src.count.unavailable");
             RefreshSourceSummary();
 
-            // ---- rotate
-            styleGrid.Items = Loc.StyleNames();
-            SetSegItems(segInterval, Loc.IntervalNames());
-            SetSegItems(segOrder, new string[] { Loc.T("ov.order.random"), Loc.T("ov.order.inorder") });
+            // ---- overview settings row (language may have just changed)
+            ReloadComboItems(cmbStyle, Loc.StyleNames());
+            ReloadComboItems(cmbInterval, Loc.IntervalNames());
+            ReloadComboItems(cmbOrder, new string[] {
+                Loc.T("ov.order.random"), Loc.T("ov.order.inorder") });
+            RefreshStripCaptions();
+            RefreshStrip();
+
+            // ---- hotkeys
             lblHkNextName.Text = Loc.T("main.btn.next");
             lblHkPrevName.Text = Loc.T("main.btn.prev");
             lblHkNext.Text = Loc.T("rot.hk.note.next");
@@ -820,6 +823,11 @@ namespace WallpaperChanger
             Loc.SetLanguage(lang);
             Config.Language = lang;
             Config.Save();
+            // A notice is a finished sentence in whatever language was active
+            // when it appeared; there is no renderer to re-run, so it would
+            // keep sitting there in the old language. Dropping it beats a
+            // half-translated footer.
+            ClearNotice();
             SyncLanguageCombo();
             ApplyTexts();
         }
@@ -855,6 +863,9 @@ namespace WallpaperChanger
             Theme.ApplyTo(this);
             Theme.ApplyMenuStrip(trayMenu);
             Theme.SetTitleBar(this);
+            // The frame line follows the palette, so a theme switch repaints it
+            // too instead of leaving a light-theme line on a dark window.
+            if (IsHandleCreated) ApplyFrameBorderColor();
             Invalidate(true);
         }
 
@@ -1056,16 +1067,44 @@ namespace WallpaperChanger
         }
 
         // The overview echo of the three rotation settings.
+        // Push the current config into the three overview dropdowns. Called
+        // on load and after the language changes; the loadingUi guard keeps
+        // the SelectedIndexChanged handlers from writing back mid-sync.
         private void RefreshStrip()
         {
-            if (lblStripStyle == null) return;
+            if (cmbStyle == null || cmbInterval == null || cmbOrder == null) return;
             string[] names = Loc.StyleNames();
-            int si = (int)Config.Style;
-            lblStripStyle.Text = (si >= 0 && si < names.Length) ? names[si] : "";
-            string[] ivs = Loc.IntervalNames();
+            int si = Math.Min(Math.Max((int)Config.Style, 0), names.Length - 1);
+            if (cmbStyle.SelectedIndex != si) cmbStyle.SelectedIndex = si;
+
             int ii = IndexOfInterval(Config.IntervalMinutes);
-            lblStripInterval.Text = (ii >= 0 && ii < ivs.Length) ? ivs[ii] : "";
-            lblStripOrder.Text = Config.RandomOrder ? Loc.T("ov.order.random") : Loc.T("ov.order.inorder");
+            if (ii < 0) ii = 2;
+            if (cmbInterval.SelectedIndex != ii) cmbInterval.SelectedIndex = ii;
+
+            int oi = Config.RandomOrder ? 0 : 1;
+            if (cmbOrder.SelectedIndex != oi) cmbOrder.SelectedIndex = oi;
+        }
+
+        // Rebuild a dropdown's items for a new language, keeping whichever
+        // item was selected (by index) selected.
+        private void ReloadComboItems(KitDropdown box, string[] items)
+        {
+            if (box == null) return;
+            int sel = box.SelectedIndex;
+            box.Items = items;
+            if (items.Length == 0) return;
+            if (sel < 0 || sel >= items.Length) sel = 0;
+            if (box.SelectedIndex != sel) box.SelectedIndex = sel;
+        }
+
+        // The three captions above the dropdowns, re-read in the new language.
+        private void RefreshStripCaptions()
+        {
+            if (stripKeys.Count < 3) return;
+            stripKeys[0].Text = Loc.T("ov.strip.style");
+            stripKeys[1].Text = Loc.T("ov.strip.interval");
+            stripKeys[2].Text = Loc.T("ov.strip.order");
+            stripRow?.Relayout();
         }
 
         // ---- "now showing" card ---------------------------------------------
@@ -1203,10 +1242,7 @@ namespace WallpaperChanger
             srcList.SetSources(new List<string>(Config.Folders), off);
             RefreshSourceSummary();
             SyncLanguageCombo();
-            styleGrid.SelectedIndex = (int)Config.Style;
-            int idx = IndexOfInterval(Config.IntervalMinutes);
-            segInterval.SelectedIndex = idx >= 0 ? idx : 2;
-            segOrder.SelectedIndex = Config.RandomOrder ? 0 : 1;
+            RefreshStrip();
             swAutoStart.Checked = Config.AutoStart;
             keyNext.Value = (Config.Hotkey >= 0 && Config.Hotkey <= 9) ? Config.Hotkey : -1;
             keyPrev.Value = (Config.HotkeyPrev >= 0 && Config.HotkeyPrev <= 9) ? Config.HotkeyPrev : -1;
@@ -1237,9 +1273,9 @@ namespace WallpaperChanger
             Config.Folders = folders;
             Config.DisabledFolders = srcList.DisabledList();
 
-            Config.Style = (WallpaperStyle)Math.Max(0, styleGrid.SelectedIndex);
-            Config.IntervalMinutes = IntervalFromIndex(segInterval.SelectedIndex);
-            Config.RandomOrder = segOrder.SelectedIndex == 0;
+            Config.Style = (WallpaperStyle)Math.Max(0, cmbStyle.SelectedIndex);
+            Config.IntervalMinutes = IntervalFromIndex(cmbInterval.SelectedIndex);
+            Config.RandomOrder = cmbOrder.SelectedIndex == 0;
             Config.AutoStart = swAutoStart.Checked;
             // Hotkeys are written straight to Config by the key caps on
             // commit, so there is nothing to collect for them here.
@@ -1282,6 +1318,7 @@ namespace WallpaperChanger
             if (Config.IntervalMinutes > 0 && HasValidFolders())
             {
                 rotateTimer.Interval = Config.IntervalMinutes * 60000;
+                nextSwitchAt = DateTime.Now + TimeSpan.FromMilliseconds(rotateTimer.Interval);
                 rotateTimer.Start();
             }
             RefreshStatusLine();
@@ -1298,6 +1335,10 @@ namespace WallpaperChanger
             }
             else
             {
+                // Resuming starts a fresh full interval - the time spent
+                // paused should not count towards the next switch.
+                rotateTimer.Interval = Config.IntervalMinutes * 60000;
+                nextSwitchAt = DateTime.Now + TimeSpan.FromMilliseconds(rotateTimer.Interval);
                 rotateTimer.Start();
                 miPause.Text = Loc.T("tray.pause");
                 SetStatus(delegate { return Loc.T("status.rotate.resumed"); });
@@ -1701,10 +1742,11 @@ namespace WallpaperChanger
             {
                 histHi = -1;
                 histList.SetRows(null, null, null, -1);
+                SizeHistoryCard(1);   // one row's height for the "nothing yet" line
                 return;
             }
 
-            int lo = Math.Max(0, cur - 3);
+            int lo = Math.Max(0, cur - 2);
             int hi = Math.Min(t.Count - 1, cur + 2);
             int rows = hi - lo + 1;
             string[] names = new string[rows];
@@ -1726,7 +1768,22 @@ namespace WallpaperChanger
 
             histHi = hi;
             histList.SetRows(names, metas, thumbs, dispCur);
+            SizeHistoryCard(rows);
             RequestMissingThumbs(t);
+        }
+
+        // The history card follows its row count (see the HistoryList case in
+        // CardPanel.ApplyPlacements): a fixed 148px card for three 47px rows
+        // sliced the last one off at the card's own bottom edge, and a fixed
+        // three-row card for an empty list left 110px of blank surface - the
+        // "空白行" a person points at. Three rows is the cap; RebuildHistory
+        // never hands the list more than that.
+        private void SizeHistoryCard(int rows)
+        {
+            if (histCard == null || histPage == null) return;
+            int show = Math.Max(1, Math.Min(3, rows));
+            histList.Height = Gfx.S(this, 47 * show);
+            histPage.SetCardHeight(histCard, Theme.CardPad * 2 + 47 * show);
         }
 
         // Thumbnails are generated on a background thread; when one lands the
@@ -1883,21 +1940,60 @@ namespace WallpaperChanger
             });
         }
 
-        // The first status line is stored as a renderer rather than as text, so
-        // a language change can re-render it in the new language. Storing the
-        // finished string meant the line kept whatever language was active when
-        // it was last written, until the next wallpaper change.
-        private Func<string> statusLine;
-
+        // A one-shot message. It goes to the footer's notice slot rather than
+        // into the status line, so what the user reads under the pages keeps
+        // describing the app ("next switch: 22:40") and does not get replaced
+        // for the rest of the session by whatever happened once.
+        //
+        // Severity is inferred from the text rather than passed in: the call
+        // sites are spread over two dozen places and every one of them already
+        // carries a localised message that says which it is.
         private void SetStatus(string line)
         {
-            statusLine = delegate { return line; };
-            RenderStatus();
+            if (string.IsNullOrEmpty(line)) return;
+            ShowNotice(line, LooksLikeError(line));
         }
 
         private void SetStatus(Func<string> render)
         {
-            statusLine = render;
+            if (render == null) return;
+            SetStatus(render() ?? "");
+        }
+
+        private static bool LooksLikeError(string s)
+        {
+            string[] marks = {
+                "！", "!", "失败", "错误", "无法", "没有可用", "重复",
+                "failed", "error", "cannot", "no pictures", "already",
+                "エラー", "できません", "失敗"
+            };
+            foreach (string mk in marks)
+            {
+                if (s.IndexOf(mk, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+            return false;
+        }
+
+        // A message that is not the status: "no pictures in any folder",
+        // "that hotkey is taken". It gets its own slot in the footer and
+        // clears itself, so the line that carries the current wallpaper is
+        // never overwritten by something that happened once.
+        private void ShowNotice(string text, bool isError)
+        {
+            if (footer == null || string.IsNullOrEmpty(text)) return;
+            footer.Notice = text;
+            footer.NoticeIsError = isError;
+            noticeTimer.Stop();
+            noticeTimer.Start();
+        }
+
+        private void ClearNotice()
+        {
+            noticeTimer.Stop();
+            if (footer == null) return;
+            footer.Notice = "";
+            // The status line was never replaced, so it only has to be redrawn
+            // once the notice stops taking the space next to it.
             RenderStatus();
         }
 
@@ -1905,8 +2001,7 @@ namespace WallpaperChanger
         {
             if (footer == null) return;
 
-            string first = statusLine != null ? (statusLine() ?? "") : "";
-            if (first.Length == 0) first = NextSwitchText();
+            string first = NextSwitchText();
 
             footer.MainText = first;
             footer.SubText = SubStatusText();
@@ -1918,12 +2013,53 @@ namespace WallpaperChanger
             // it has to move with it.
             if (rail != null && rotateTimer != null && rotateTimer.Enabled)
             {
-                rail.Countdown = DateTime.Now.AddMilliseconds(rotateTimer.Interval).ToString("HH:mm");
+                rail.Countdown = CountdownText();
                 rail.Rotating = true;
             }
             else if (rail != null)
             {
                 rail.Rotating = false;
+            }
+        }
+
+        // The moment the next automatic switch fires. A 24h interval shows
+        // tomorrow's time - that is genuinely when it fires. A bare "21:00"
+        // reads as "now" when the clock says 21:00, so a target that is not
+        // today carries its day with it.
+        private string CountdownText()
+        {
+            DateTime at = nextSwitchAt == DateTime.MinValue
+                ? DateTime.Now + TimeSpan.FromMilliseconds(rotateTimer.Interval)
+                : nextSwitchAt;
+            return DayPrefix(at) + at.ToString("HH:mm");
+        }
+
+        // "明天 " /  "tomorrow " / "明日 " when the target lands on another
+        // day, "" while it is still today. Compared on dates, not on a
+        // 24-hour delta, so a switch at 23:50 with a 20-minute interval does
+        // not get tagged as tomorrow.
+        private static string DayPrefix(DateTime at)
+        {
+            int days = (at.Date - DateTime.Now.Date).Days;
+            if (days <= 0) return "";
+            if (days == 1) return Loc.T("time.tomorrow") + " ";
+            if (days == 2) return Loc.T("time.dayafter") + " ";
+            return Loc.F("time.indays", days) + " ";
+        }
+
+        // One-second pulse: move the rail's big clock and the status line's
+        // "next switch" readout towards the fixed target time.
+        private void RefreshCountdown()
+        {
+            if (rail != null && rotateTimer != null && rotateTimer.Enabled)
+            {
+                rail.Countdown = CountdownText();
+            }
+            // Ungated: the footer also has to be able to say "rotation paused"
+            // and to move from "22:40" to "tomorrow 22:40" while paused.
+            if (footer != null && footer.Notice.Length == 0)
+            {
+                footer.MainText = NextSwitchText();
             }
         }
 
@@ -1952,7 +2088,16 @@ namespace WallpaperChanger
             // rotateTimer is created after BuildUi/BuildTray, and ApplyTexts
             // runs inside BuildTray, so it can still be null here.
             if (rotateTimer != null && rotateTimer.Enabled)
-                return Loc.F("status.nextswitch", DateTime.Now.AddMilliseconds(rotateTimer.Interval).ToString("HH:mm:ss"));
+            {
+                DateTime at = nextSwitchAt == DateTime.MinValue
+                    ? DateTime.Now + TimeSpan.FromMilliseconds(rotateTimer.Interval)
+                    : nextSwitchAt;
+                // Seconds tick every frame and would make the status bar the
+                // loudest thing on screen; the rail's big clock is the one
+                // that counts down. Same day prefix as the rail, so a 24h
+                // interval does not read as "right now".
+                return Loc.F("status.nextswitch", DayPrefix(at) + at.ToString("HH:mm"));
+            }
             return Loc.T("status.paused");
         }
 
@@ -2010,6 +2155,7 @@ namespace WallpaperChanger
             base.OnLoad(e);
             ApplySavedWindowSize();
             if (bar != null) bar.SyncWindowState(WindowState);
+            LayoutChrome();
         }
 
         // Runs after the handle exists, so the auto-scaled Size is already in
@@ -2051,7 +2197,26 @@ namespace WallpaperChanger
             catch
             {
             }
+            ApplyFrameBorderColor();
             UpdateMaximizedBounds();
+            LayoutChrome();
+        }
+
+        // Windows 11 draws a 1px frame line around a borderless window - the
+        // black (or accent-coloured) outline that reads as "程序四周的黑边框".
+        // DWMWA_BORDER_COLOR suppresses it; painting it in the theme's own
+        // background is the variant that also works on the builds where the
+        // "no border" sentinel is ignored.
+        private void ApplyFrameBorderColor()
+        {
+            try
+            {
+                int rgb = Theme.FormBack.R | (Theme.FormBack.G << 8) | (Theme.FormBack.B << 16);
+                DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref rgb, sizeof(int));
+            }
+            catch
+            {
+            }
         }
 
         protected override void OnResize(EventArgs e)
@@ -2060,6 +2225,29 @@ namespace WallpaperChanger
             // The middle caption button shows a restore glyph once the window is
             // maximised, which is what every Windows title bar does.
             if (bar != null) bar.SyncWindowState(WindowState);
+            // Belt and braces: nothing in the UI can request maximise any more
+            // (no button, no WS_MAXIMIZEBOX, no snap), but a programmatic
+            // WindowState=Maximized would still go through. Assigning Normal
+            // from inside OnResize re-enters the same state the setter is
+            // still holding, so queue it: the very next message-loop turn
+            // restores the window.
+            if (WindowState == FormWindowState.Maximized && !unmaximizeQueued)
+            {
+                unmaximizeQueued = true;
+                BeginInvoke(new Action(delegate
+                {
+                    unmaximizeQueued = false;
+                    if (WindowState == FormWindowState.Maximized)
+                    {
+                        WindowState = FormWindowState.Normal;
+                        LayoutChrome();
+                    }
+                }));
+            }
+            // The chrome is laid out against the REAL client rectangle
+            // (GetClientRect), which WinForms' ClientSize misreports by the
+            // hidden frame on every resize - so re-derive it every time.
+            LayoutChrome();
 
             if (WindowState == FormWindowState.Normal)
             {
@@ -2139,6 +2327,9 @@ namespace WallpaperChanger
         private static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetClientRect(IntPtr hwnd, out RECT r);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after,
             int x, int y, int cx, int cy, int flags);
 
@@ -2147,15 +2338,19 @@ namespace WallpaperChanger
             get { return (int)Math.Round(6.0 * DeviceDpi / 96.0); }
         }
 
-        // Keep the system frame style alive so DWM still provides the shadow,
-        // Aero snap and native maximise, while the client area takes the
-        // whole window (WM_NCCALCSIZE below).
+        // Keep the system frame style alive so DWM still provides the shadow
+        // and the resize edges, while the client area takes the whole window
+        // (WM_NCCALCSIZE below). WS_MAXIMIZEBOX is cleared explicitly: the
+        // window must not maximise, and clearing the bit is what makes the
+        // window menu, snap-to-top and any WM_SYSCOMMAND path agree with the
+        // missing title-bar button. OnResize still un-maximises as a backstop.
         protected override CreateParams CreateParams
         {
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.Style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+                cp.Style |= WS_THICKFRAME | WS_MINIMIZEBOX;
+                cp.Style &= ~WS_MAXIMIZEBOX;
                 return cp;
             }
         }
@@ -2205,6 +2400,7 @@ namespace WallpaperChanger
         private const int HTBOTTOMRIGHT = 17;
 
         private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWA_BORDER_COLOR = 34;
         private const int DWMWCP_ROUND = 2;
 
         [System.Runtime.InteropServices.DllImport("dwmapi.dll", PreserveSig = false)]

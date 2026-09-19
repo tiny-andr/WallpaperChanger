@@ -187,7 +187,8 @@ namespace WallpaperChanger
     internal enum IconKind
     {
         Grid, Folder, Rotate, Gear, Help, Plus, ArrowLeft, ArrowRight,
-        Check, Close, Minimize, Maximize, Restore, Search, FolderOpen, Trash, Pause, Play
+        Check, Close, Minimize, Maximize, Restore, Search, FolderOpen, Trash, Pause, Play,
+        ChevronDown
     }
 
     // All icons are drawn as vector strokes so they stay crisp at any DPI
@@ -282,6 +283,12 @@ namespace WallpaperChanger
                             new PointF(ox + 12.5f * u, oy + 6 * u),
                             new PointF(ox + 18.5f * u, oy + 12 * u),
                             new PointF(ox + 12.5f * u, oy + 18 * u) });
+                        break;
+                    case IconKind.ChevronDown:
+                        g.DrawLines(p, new PointF[] {
+                            new PointF(ox + 7 * u, oy + 10 * u),
+                            new PointF(ox + 12 * u, oy + 15 * u),
+                            new PointF(ox + 17 * u, oy + 10 * u) });
                         break;
                     case IconKind.Check:
                         g.DrawLines(p, new PointF[] {
@@ -548,9 +555,17 @@ namespace WallpaperChanger
                 SegmentedControl seg = p.C as SegmentedControl;
                 if (seg != null) h = Math.Max(h, seg.MeasureHeight(w));
                 // A source list is one row taller every time a folder is added,
-                // so its own answer beats the height it was placed with.
+                // and one row shorter every time one is removed. Its own answer
+                // beats the height it was placed with: the placement reserves
+                // 120px, so a single source used to leave ~86px of empty
+                // surface under the row.
                 SourceList list = p.C as SourceList;
-                if (list != null) h = Math.Max(h, Gfx.S(this, list.PreferredHeight));
+                if (list != null) h = Math.Max(Gfx.S(this, 1), Gfx.S(this, list.PreferredHeight));
+                // Same for the switch history: it shows one row per timeline
+                // entry, and a card laid out for rows it does not have is a
+                // blank band at the bottom.
+                HistoryList hist = p.C as HistoryList;
+                if (hist != null) h = Math.Max(Gfx.S(this, 1), Gfx.S(this, hist.PreferredHeight));
 
                 p.C.SetBounds(x, b.Y + Gfx.S(this, p.Y), w, h);
             }
@@ -559,9 +574,11 @@ namespace WallpaperChanger
                 int p = PadPx;
                 int w = Gfx.S(this, headerPlacement.W);
                 int h = Gfx.S(this, headerPlacement.H);
-                headerPlacement.C.SetBounds(Math.Max(p, Width - p - w),
-                    Math.Max(0, (Gfx.S(this, 22) + Gfx.S(this, 8) - h) / 2 + p / 2),
-                    w, h);
+                // Centre on the title line (title occupies the first 22px of
+                // the body area). The old formula added pad/2, which pushed a
+                // 30px dropdown visibly above the caption next to it.
+                int y = Math.Max(0, p + (Gfx.S(this, 22) - h) / 2);
+                headerPlacement.C.SetBounds(Math.Max(p, Width - p - w), y, w, h);
             }
 
             // Placements give every child a fixed box. A few rows in the design
@@ -1054,6 +1071,323 @@ namespace WallpaperChanger
         }
     }
 
+    // ---- dropdown -------------------------------------------------------
+
+    // A design-system dropdown. The native ComboBox was the wrong shape for
+    // this UI twice over: it paints classic Win32 chrome (square 3D border,
+    // system font, white box) that no amount of theming reached, and its
+    // drop-down list is a separate OS-drawn window. This control draws the
+    // closed field with the same border/radius/type scale as every other
+    // control, and opens a self-painted borderless list instead.
+    internal class KitDropdown : Control, IThemed
+    {
+        // The list is its own top-level window so the cards' clipping (and the
+        // page's own scroll offset) cannot cut it off.
+        private sealed class ListForm : Form
+        {
+            private readonly KitDropdown owner;
+            private int hot = -1;
+
+            public ListForm(KitDropdown owner)
+            {
+                this.owner = owner;
+                FormBorderStyle = FormBorderStyle.None;
+                ShowInTaskbar = false;
+                StartPosition = FormStartPosition.Manual;
+                KeyPreview = true;
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                         ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            }
+
+            public int RowHeight { get { return Gfx.S(owner, Theme.MenuItemH); } }
+            public int ListPad { get { return Gfx.S(owner, 5); } }
+
+            public int PreferredHeight
+            {
+                get { return owner.itemList.Count * RowHeight + ListPad * 2; }
+            }
+
+            public int PreferredWidth(int minWidth)
+            {
+                Font f = Theme.UiFont(owner, Theme.FsSub);
+                int w = minWidth;
+                foreach (string s in owner.itemList)
+                {
+                    w = Math.Max(w, TextRenderer.MeasureText(s, f).Width + Gfx.S(owner, 34));
+                }
+                return w;
+            }
+
+            public void Highlight(int index)
+            {
+                int v = owner.itemList.Count == 0 ? -1
+                    : Math.Max(0, Math.Min(owner.itemList.Count - 1, index));
+                if (v == hot) return;
+                hot = v;
+                Invalidate();
+            }
+
+            protected override void OnDeactivate(EventArgs e)
+            {
+                base.OnDeactivate(e);
+                Close();
+            }
+
+            protected override bool ProcessDialogKey(Keys keyData)
+            {
+                // Esc closes, Enter commits, arrows move - the three things a
+                // drop-down list is expected to answer.
+                if (keyData == Keys.Escape) { Close(); return true; }
+                if (keyData == Keys.Enter) { Commit(); return true; }
+                if (keyData == Keys.Down) { Highlight(hot + 1); return true; }
+                if (keyData == Keys.Up) { Highlight(hot - 1); return true; }
+                return base.ProcessDialogKey(keyData);
+            }
+
+            protected override void OnMouseMove(MouseEventArgs e)
+            {
+                base.OnMouseMove(e);
+                Highlight(IndexAt(e.Y));
+            }
+
+            protected override void OnMouseDown(MouseEventArgs e)
+            {
+                base.OnMouseDown(e);
+                int i = IndexAt(e.Y);
+                if (i < 0) return;
+                hot = i;
+                Commit();
+            }
+
+            private void Commit()
+            {
+                int i = hot;
+                Close();
+                if (i >= 0) owner.SetSelectedFromList(i);
+            }
+
+            private int IndexAt(int y)
+            {
+                int i = (y - ListPad) / Math.Max(1, RowHeight);
+                if (i < 0 || i >= owner.itemList.Count) return -1;
+                return i;
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                Graphics g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Theme.Surface);
+                RectangleF all = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+                Gfx.StrokeRound(g, all, Gfx.S(this, Theme.RadMenu), Theme.Border, 1f);
+
+                Font f = Theme.UiFont(this, Theme.FsSub);
+                int h = RowHeight;
+                for (int i = 0; i < owner.itemList.Count; i++)
+                {
+                    Rectangle rc = new Rectangle(ListPad, ListPad + i * h,
+                        Math.Max(0, Width - ListPad * 2), h);
+                    bool sel = i == owner.SelectedIndex;
+                    if (i == hot) Gfx.FillRound(g, rc, Gfx.S(this, Theme.RadSegItem), Theme.Hover);
+                    // The chosen row keeps the strong ink; a hovered row only
+                    // swaps the plane (handoff 2.2).
+                    Color ink = (sel || i == hot) ? Theme.Fore : Theme.MutedStrong;
+                    Gfx.Text(g, owner.itemList[i], f, ink,
+                        new Rectangle(rc.X + Gfx.S(this, 9), rc.Y,
+                            Math.Max(0, rc.Width - Gfx.S(this, 30)), rc.Height),
+                        Gfx.Ellipsis(Gfx.LeftMid));
+                    if (sel)
+                    {
+                        float cs = Gfx.S(this, 14);
+                        IconPainter.Draw(g, IconKind.Check,
+                            new RectangleF(rc.Right - cs - Gfx.S(this, 9),
+                                rc.Y + (rc.Height - cs) / 2f, cs, cs),
+                            Theme.AccentText, Math.Max(1f, Gfx.Scale(this) * 1.8f));
+                    }
+                }
+            }
+        }
+
+        private readonly List<string> itemList = new List<string>();
+        private int selected = -1;
+        private bool hover;
+        private ListForm open;
+
+        public event EventHandler SelectedIndexChanged;
+
+        public KitDropdown()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Height = Theme.InputH;
+            Cursor = Cursors.Hand;
+            TabStop = true;
+        }
+
+        public string[] Items
+        {
+            get { return itemList.ToArray(); }
+            set
+            {
+                itemList.Clear();
+                if (value != null) itemList.AddRange(value);
+                Invalidate();
+            }
+        }
+
+        public int SelectedIndex
+        {
+            get { return selected; }
+            set
+            {
+                int v = itemList.Count == 0 ? -1 : Math.Max(0, Math.Min(itemList.Count - 1, value));
+                if (v == selected) return;
+                selected = v;
+                Invalidate();
+                EventHandler h = SelectedIndexChanged;
+                if (h != null) h(this, EventArgs.Empty);
+            }
+        }
+
+        // True while the list is showing. The popup closes itself when it
+        // loses focus, so "did the click open it" cannot be answered by
+        // looking for the window after the fact.
+        public bool IsOpen
+        {
+            get { return open != null; }
+        }
+
+        // Set by the popup's list click. Kept apart from the property so the
+        // popup does not raise a second change notification for itself.
+        private void SetSelectedFromList(int index)
+        {
+            SelectedIndex = index;
+            Focus();
+        }
+
+        public void ApplyTheme()
+        {
+            if (open != null) open.Invalidate();
+            Invalidate();
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; base.OnMouseEnter(e); Invalidate(); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; base.OnMouseLeave(e); Invalidate(); }
+
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (!Enabled) return;
+            Focus();
+            Toggle();
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            if (keyData == Keys.Down || keyData == Keys.Up || keyData == Keys.Space) return true;
+            return base.IsInputKey(keyData);
+        }
+
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (!Enabled) return;
+            if (e.KeyCode == Keys.Down || e.KeyCode == Keys.Space)
+            {
+                if (open == null) Open();
+                else { open.Highlight(selected + 1); open.Invalidate(); }
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Up)
+            {
+                if (open == null) Open();
+                else { open.Highlight(selected - 1); open.Invalidate(); }
+                e.Handled = true;
+            }
+            else if (e.KeyCode == Keys.Enter && open != null)
+            {
+                open.Close();
+                e.Handled = true;
+            }
+        }
+
+        protected override void OnLostFocus(EventArgs e)
+        {
+            base.OnLostFocus(e);
+            Invalidate();
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            Invalidate();
+        }
+
+        private void Toggle()
+        {
+            if (open != null) { open.Close(); return; }
+            Open();
+        }
+
+        private void Open()
+        {
+            if (itemList.Count == 0) return;
+            ListForm f = new ListForm(this);
+            f.Highlight(selected);
+            int w = Math.Max(Width, f.PreferredWidth(Width));
+            int h = f.PreferredHeight;
+            Point topLeft = PointToScreen(Point.Empty);
+            Point at = PointToScreen(new Point(0, Height + Gfx.S(this, 4)));
+            // Flip above the field when the list would fall off the screen.
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            if (at.Y + h > wa.Bottom) at.Y = topLeft.Y - h - Gfx.S(this, 4);
+            if (at.X + w > wa.Right) at.X = wa.Right - w;
+            f.SetBounds(at.X, at.Y, w, h);
+            open = f;
+            f.Show();
+            f.Activate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Surface);
+
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
+            // The same three-state recipe as the secondary button: transparent
+            // at rest, --hover on hover, --subtle while the list is open.
+            if (open != null) Gfx.FillRound(g, r, Gfx.S(this, Theme.RadInput), Theme.Subtle);
+            else if (hover && Enabled) Gfx.FillRound(g, r, Gfx.S(this, Theme.RadInput), Theme.Hover);
+            Gfx.StrokeRound(g, r, Gfx.S(this, Theme.RadInput),
+                hover && Enabled ? Theme.ForeMuted : Theme.Border, 1f);
+
+            Color ink = Enabled ? Theme.Fore : Theme.DisabledText;
+            int pad = Gfx.S(this, 10);
+            int iconS = Gfx.S(this, 15);
+            int textW = Math.Max(0, Width - pad * 2 - iconS - Gfx.S(this, 8));
+            Gfx.Text(g, selected >= 0 && selected < itemList.Count ? itemList[selected] : "",
+                Theme.UiFont(this, Theme.FsSub), ink,
+                new Rectangle(pad, 0, textW, Height), Gfx.Ellipsis(Gfx.LeftMid));
+            IconPainter.Draw(g, IconKind.ChevronDown,
+                new RectangleF(Width - pad - iconS, (Height - iconS) / 2f, iconS, iconS),
+                Enabled ? Theme.ForeMuted : Theme.DisabledText, Math.Max(1f, Gfx.Scale(this) * 1.5f));
+
+            if (InputMode.Keyboard && Focused && Enabled)
+            {
+                Gfx.FocusRing(g, r, Gfx.S(this, Theme.RadInput), this);
+            }
+        }
+
+        // The list window outlives this control only if the form is torn down
+        // mid-open; closing it here leaves no orphan top-level window behind.
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            if (open != null) { open.Close(); open = null; }
+            base.OnHandleDestroyed(e);
+        }
+    }
+
     // ---- toggle switch --------------------------------------------------
 
     // ---- on/off switch ---------------------------------------------------
@@ -1405,6 +1739,8 @@ namespace WallpaperChanger
         private string mainText = "";
         private string subText = "";
         private string dirtyText = "";
+        private string notice = "";
+        private bool noticeError;
         private bool dirty;
         private bool healthy = true;
 
@@ -1433,6 +1769,23 @@ namespace WallpaperChanger
         {
             get { return subText; }
             set { subText = value ?? ""; Invalidate(); }
+        }
+
+        // A transient message ("no pictures in any folder", "hotkey taken").
+        // It used to be written into MainText, which meant one failed rotation
+        // replaced the current-wallpaper line for the rest of the session -
+        // the status bar's whole job. It now has its own slot next to the save
+        // button and is cleared by the host after a few seconds.
+        public string Notice
+        {
+            get { return notice; }
+            set { notice = value ?? ""; Invalidate(); }
+        }
+
+        public bool NoticeIsError
+        {
+            get { return noticeError; }
+            set { noticeError = value; Invalidate(); }
         }
 
         public string DirtyText
@@ -1555,6 +1908,31 @@ namespace WallpaperChanger
                     Gfx.Text(g, dirtyText, fc, Theme.ForeMuted,
                         new Rectangle(cx + cd + Gfx.S(this, 7), cyy,
                             Math.Max(0, chipW - cd - Gfx.S(this, 7)), Gfx.S(this, 24)),
+                        Gfx.Ellipsis(Gfx.LeftMid));
+                }
+            }
+
+            // The transient notice sits between the status text and the dirty
+            // chip, right-aligned so it never shifts the line that carries the
+            // current wallpaper.
+            if (notice.Length > 0)
+            {
+                Font fn = Theme.UiFont(this, Theme.FsCap);
+                int need = TextRenderer.MeasureText(notice, fn).Width + Gfx.S(this, 18);
+                int stop = saveBtn.Left - Gfx.S(this, 14);
+                if (chipW > 0) stop -= chipW + Gfx.S(this, 14);
+                int nx = stop - need;
+                if (nx > x)
+                {
+                    int nd = Gfx.S(this, 6);
+                    Color ink = noticeError ? Theme.Warn : Theme.Ok;
+                    using (SolidBrush b = new SolidBrush(ink))
+                    {
+                        g.FillEllipse(b, nx, cy - nd / 2f, nd, nd);
+                    }
+                    Gfx.Text(g, notice, fn, ink,
+                        new Rectangle(nx + nd + Gfx.S(this, 7), 0,
+                            Math.Max(0, need - nd - Gfx.S(this, 7)), Height),
                         Gfx.Ellipsis(Gfx.LeftMid));
                 }
             }
@@ -1681,6 +2059,15 @@ namespace WallpaperChanger
             set { helpBtn.Text = value ?? ""; LayoutChildren(); Invalidate(); }
         }
 
+        // The main window never maximises (fixed-width design), so it asks
+        // for the middle button to be gone rather than merely disabled.
+        private bool hasMaxButton = true;
+        public bool HasMaxButton
+        {
+            get { return hasMaxButton; }
+            set { hasMaxButton = value; if (!value && maxBtn != null) maxBtn.Visible = false; LayoutChildren(); Invalidate(); }
+        }
+
         public Image AppIcon
         {
             get { return appIcon; }
@@ -1726,13 +2113,23 @@ namespace WallpaperChanger
             int bs = Gfx.S(this, Theme.WinBtnSize);
             int h = Gfx.S(this, Theme.WinBtnSize);
             closeBtn.SetBounds(Width - bs, 0, bs, h);
-            maxBtn.SetBounds(Width - bs * 2, 0, bs, h);
-            minBtn.SetBounds(Width - bs * 3, 0, bs, h);
+            if (hasMaxButton)
+            {
+                maxBtn.Visible = true;
+                maxBtn.SetBounds(Width - bs * 2, 0, bs, h);
+                minBtn.SetBounds(Width - bs * 3, 0, bs, h);
+            }
+            else
+            {
+                maxBtn.Visible = false;
+                minBtn.SetBounds(Width - bs * 2, 0, bs, h);
+            }
 
             Font f = Theme.UiFont(this, Theme.FsSub);
             int tw = string.IsNullOrEmpty(helpBtn.Text) ? 0
                 : TextRenderer.MeasureText(helpBtn.Text, f).Width + Gfx.S(this, 20);
-            helpBtn.SetBounds(Math.Max(0, Width - bs * 3 - Gfx.S(this, 10) - tw),
+            int rightEdge = hasMaxButton ? bs * 3 : bs * 2;
+            helpBtn.SetBounds(Math.Max(0, Width - rightEdge - Gfx.S(this, 10) - tw),
                 (Height - Gfx.S(this, Theme.BtnSmallH)) / 2, tw, Gfx.S(this, Theme.BtnSmallH));
         }
 
@@ -1814,13 +2211,20 @@ namespace WallpaperChanger
         private readonly List<int> heights = new List<int>();
         private PageHead head;
 
+        // Self-managed vertical scroll. AutoScroll was the previous answer and
+        // it leaked horizontal scrolling everywhere: any moment a child was
+        // wider than the viewport (mid-resize, after a DPI change) the
+        // horizontal bar appeared and stayed, and dragging it shoved the whole
+        // page sideways. Only Y ever moves now.
+        private int scrollY;
+        private int maxScroll;
+
         public PageStack()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             Dock = DockStyle.Fill;
             BackColor = Theme.FormBack;
-            AutoScroll = true;
         }
 
         // Optional page header ("h2.ph" + "p.ph-sub").
@@ -1849,6 +2253,18 @@ namespace WallpaperChanger
             return c;
         }
 
+        // Resize a card that was placed with a fixed height. The history card
+        // is the caller: its row count changes with the timeline, and a card
+        // sized for rows it does not have is a blank band at the bottom.
+        public void SetCardHeight(CardPanel card, int height)
+        {
+            int i = cards.IndexOf(card);
+            if (i < 0) return;
+            if (heights[i] == height) return;
+            heights[i] = height;
+            Relayout();
+        }
+
         public void ApplyTheme()
         {
             BackColor = Theme.FormBack;
@@ -1862,10 +2278,26 @@ namespace WallpaperChanger
             Relayout();
         }
 
+        protected override void OnMouseWheel(MouseEventArgs e)
+        {
+            base.OnMouseWheel(e);
+            if (maxScroll <= 0) return;
+            // One notch = three card-gap units, the same speed class as a
+            // browser page.
+            int step = Gfx.S(this, Theme.GapCard) * 3 * Math.Sign(-e.Delta);
+            ScrollTo(scrollY + step);
+        }
+
         // Public because a card may have to grow after its own children
         // resized themselves (see CardPanel.Relayout).
         public void RelayoutNow()
         {
+            Relayout();
+        }
+
+        public void ScrollTo(int y)
+        {
+            scrollY = Math.Max(0, Math.Min(maxScroll, y));
             Relayout();
         }
 
@@ -1880,7 +2312,7 @@ namespace WallpaperChanger
             if (head != null)
             {
                 int hh = head.PreferredHeight;
-                head.SetBounds(padX, y, w, hh);
+                head.SetBounds(padX, y - scrollY, w, hh);
                 y += hh + Gfx.S(this, 4);
             }
 
@@ -1890,13 +2322,41 @@ namespace WallpaperChanger
                 // Size at the design height first: that resize is what applies
                 // the card's placements, and the wrapped height of anything
                 // inside is only known once they have run.
-                cards[i].SetBounds(padX, y, w, h);
+                cards[i].SetBounds(padX, y - scrollY, w, h);
                 h = Math.Max(h, cards[i].ContentHeight);
-                cards[i].SetBounds(padX, y, w, h);
+                cards[i].SetBounds(padX, y - scrollY, w, h);
                 y += h + gap;
             }
 
-            AutoScrollMinSize = new Size(0, y + Gfx.S(this, Theme.PadBottom));
+            int contentBottom = y - gap + Gfx.S(this, Theme.PadBottom);
+            maxScroll = Math.Max(0, contentBottom - ClientSize.Height);
+            if (scrollY > maxScroll)
+            {
+                scrollY = maxScroll;
+                Relayout();
+                return;
+            }
+            Invalidate();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            if (maxScroll <= 0) return;
+
+            // A quiet 4px thumb on the right edge - the only scrolling this
+            // page offers, and there is deliberately no horizontal counterpart.
+            float frac = (float)ClientSize.Height / (ClientSize.Height + maxScroll);
+            int track = ClientSize.Height - Gfx.S(this, 8);
+            int thumbH = Math.Max(Gfx.S(this, 32), (int)(track * frac));
+            int thumbY = Gfx.S(this, 4) + (int)((track - thumbH) *
+                (maxScroll > 0 ? (float)scrollY / maxScroll : 0f));
+            RectangleF bar = new RectangleF(
+                ClientSize.Width - Gfx.S(this, 6), thumbY, Gfx.S(this, 3), thumbH);
+            using (SolidBrush b = new SolidBrush(Color.FromArgb(90, Theme.Fore)))
+            {
+                e.Graphics.FillRectangle(b, bar);
+            }
         }
     }
 

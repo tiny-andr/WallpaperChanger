@@ -146,6 +146,12 @@ namespace WallpaperChanger
             m["status.prevtag"] = "（上一张）";
             m["status.prevfail"] = "壁纸回退失败: {0}";
             m["status.nextswitch"] = "下次切换: {0}";
+            // Day tags for a switch that does not land today. A 24h interval
+            // otherwise shows the same clock reading as "now", which reads as
+            // a bug.
+            m["time.tomorrow"] = "明天";
+            m["time.dayafter"] = "后天";
+            m["time.indays"] = "{0} 天后";
             m["status.paused"] = "轮换已暂停";
             m["status.rotate.paused"] = "已暂停轮换";
             m["status.rotate.resumed"] = "轮换已恢复";
@@ -345,6 +351,9 @@ namespace WallpaperChanger
             m["status.prevtag"] = " (previous)";
             m["status.prevfail"] = "Failed to step back: {0}";
             m["status.nextswitch"] = "Next switch: {0}";
+            m["time.tomorrow"] = "tomorrow";
+            m["time.dayafter"] = "in 2 days";
+            m["time.indays"] = "in {0} days";
             m["status.paused"] = "Rotation paused";
             m["status.rotate.paused"] = "Rotation paused";
             m["status.rotate.resumed"] = "Rotation resumed";
@@ -544,6 +553,9 @@ namespace WallpaperChanger
             m["status.prevtag"] = "（前の壁紙）";
             m["status.prevfail"] = "戻る処理に失敗: {0}";
             m["status.nextswitch"] = "次回の切り替え: {0}";
+            m["time.tomorrow"] = "明日";
+            m["time.dayafter"] = "明後日";
+            m["time.indays"] = "{0} 日後";
             m["status.paused"] = "ローテーション停止中";
             m["status.rotate.paused"] = "ローテーションを停止しました";
             m["status.rotate.resumed"] = "ローテーションを再開しました";
@@ -712,9 +724,9 @@ namespace WallpaperChanger
             return new HelpLine[]
             {
                 new HelpLine(1, "界面一览"),
-                new HelpLine(0, "  • 左侧导航共四页：概览 / 壁纸源 / 轮换 / 常规。"),
+                new HelpLine(0, "  • 左侧导航共三页：概览 / 壁纸源 / 常规。"),
                 new HelpLine(0, "  • 改完设置（壁纸源列表也一样）点一次底部状态栏右侧的「保存」才写盘；有未保存改动时状态栏会提示。"),
-                new HelpLine(0, "  • 标题栏右侧依次是帮助、最小化 / 最大化 / 关闭；点关闭只是收进托盘。"),
+                new HelpLine(0, "  • 标题栏右侧依次是帮助、最小化 / 关闭；点关闭只是收进托盘。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "壁纸源"),
                 new HelpLine(0, "  • 在「壁纸源」页直接管理：右上角「添加文件夹」新增一个源。"),
@@ -725,12 +737,12 @@ namespace WallpaperChanger
                 new HelpLine(0, "  • 可以添加多个文件夹，只有启用的源会进入同一个轮换池。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "轮换与外观"),
-                new HelpLine(0, "  • 「轮换」页决定壁纸怎么铺（填充 / 适应 / 拉伸 / 平铺 / 居中 / 跨屏）、多久换一次（1 分钟至 1 天）、按随机顺序还是列表顺序挑。"),
+                new HelpLine(0, "  • 「概览」页中间一行直接改三件事：壁纸怎么铺（填充 / 适应 / 拉伸 / 平铺 / 居中 / 跨屏）、多久换一次（1 分钟至 24 小时）、按随机顺序还是列表顺序挑。"),
                 new HelpLine(0, "  • 「常规」页控制开机自动启动、浅色 / 深色主题、界面语言（中文 / English / 日本語）。"),
                 new HelpLine(0, "  • 主题与语言点选即生效、立即写入配置；其余设置需要点「保存」。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "快捷键"),
-                new HelpLine(0, "  • 默认：Ctrl+9 = 下一张，Ctrl+8 = 上一张（可在「轮换」页重新绑定）。"),
+                new HelpLine(0, "  • 默认：Ctrl+9 = 下一张，Ctrl+8 = 上一张（可在「常规」页重新绑定）。"),
                 new HelpLine(0, "  • 主键盘与小键盘数字键都支持。"),
                 new HelpLine(0, "  • 「上一张」可连续回退，最远回到本次启动时显示的那张壁纸。"),
                 new HelpLine(0, ""),
@@ -759,9 +771,9 @@ namespace WallpaperChanger
             return new HelpLine[]
             {
                 new HelpLine(1, "The window at a glance"),
-                new HelpLine(0, "  • Four pages down the left: Overview / Sources / Rotation / General."),
+                new HelpLine(0, "  • Three pages down the left: Overview / Sources / General."),
                 new HelpLine(0, "  • After changing anything - the source list included - press Save on the right of the status bar. The bar warns while changes are unsaved."),
-                new HelpLine(0, "  • The buttons at the right of the title bar are Help, then minimise / maximise / close. Closing only puts the window back in the tray."),
+                new HelpLine(0, "  • The buttons at the right of the title bar are Help, then minimise / close. Closing only puts the window back in the tray."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "Wallpaper sources"),
                 new HelpLine(0, "  • Manage them right on the Sources page: Add folder in the top right starts a new source."),
@@ -772,12 +784,12 @@ namespace WallpaperChanger
                 new HelpLine(0, "  • Several folders are fine, but only the enabled ones feed the one rotation pool."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "Rotation and appearance"),
-                new HelpLine(0, "  • The Rotation page decides how a wallpaper is laid out (fill / fit / stretch / tile / centre / span), how often it changes (1 minute to 1 day), and whether the order is random or by list."),
+                new HelpLine(0, "  • The row in the middle of Overview changes the three things directly: how a wallpaper is laid out (fill / fit / stretch / tile / centre / span), how often it changes (1 minute to 24 hours), and whether the order is random or by list."),
                 new HelpLine(0, "  • The General page holds Start with Windows, the light / dark theme and the interface language (中文 / English / 日本語)."),
                 new HelpLine(0, "  • Theme and language apply and are written to the config the moment they are picked; everything else waits for Save."),
                 new HelpLine(0, ""),
                 new HelpLine(1, "Hotkeys"),
-                new HelpLine(0, "  • Defaults: Ctrl+9 = next wallpaper, Ctrl+8 = previous. Both are rebindable on the Rotation page."),
+                new HelpLine(0, "  • Defaults: Ctrl+9 = next wallpaper, Ctrl+8 = previous. Both are rebindable on the General page."),
                 new HelpLine(0, "  • Both the main-row and the numeric keypad digits work."),
                 new HelpLine(0, "  • Previous steps back repeatedly, as far as the wallpaper shown when the program started."),
                 new HelpLine(0, ""),
@@ -806,9 +818,9 @@ namespace WallpaperChanger
             return new HelpLine[]
             {
                 new HelpLine(1, "画面の概要"),
-                new HelpLine(0, "  • 左側のナビゲーションは四ページ：概要 / ソース / ローテーション / 一般。"),
+                new HelpLine(0, "  • 左側のナビゲーションは三ページ：概要 / ソース / 一般。"),
                 new HelpLine(0, "  • 設定（ソース一覧も同じ）を変えたら、ステータスバー右側の「保存」を一度押してください。未保存の変更があるとバーに表示されます。"),
-                new HelpLine(0, "  • タイトルバー右側は、ヘルプ、最小化 / 最大化 / 閉じるの順です。閉じてもトレイに入るだけです。"),
+                new HelpLine(0, "  • タイトルバー右側は、ヘルプ、最小化 / 閉じるの順です。閉じてもトレイに入るだけです。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "壁紙ソース"),
                 new HelpLine(0, "  • 「ソース」ページで直接管理します。右上の「フォルダーを追加」で新規追加できます。"),
@@ -819,12 +831,12 @@ namespace WallpaperChanger
                 new HelpLine(0, "  • 複数フォルダーを追加できますが、有効なソースだけが一つのローテーションプールに入ります。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "ローテーションと外観"),
-                new HelpLine(0, "  • 「ローテーション」ページで、表示方法（全画面 / フィット / 伸縮 / タイル / 中央 / 複数画面）、切り替え間隔（1分〜1日）、ランダム順かリスト順かを決めます。"),
+                new HelpLine(0, "  • 「概要」ページの中央の行で三つを直接変えられます：表示方法（全画面 / フィット / 伸縮 / タイル / 中央 / 複数画面）、切り替え間隔（1分〜24時間）、ランダム順かリスト順か。"),
                 new HelpLine(0, "  • 「一般」ページには、Windows 起動時の自動開始、ライト / ダークテーマ、表示言語（中文 / English / 日本語）があります。"),
                 new HelpLine(0, "  • テーマと言語は選んだ瞬間に反映され設定に書き込まれます。その他の設定は「保存」が必要です。"),
                 new HelpLine(0, ""),
                 new HelpLine(1, "ホットキー"),
-                new HelpLine(0, "  • 既定：Ctrl+9 = 次の壁紙、Ctrl+8 = 前の壁紙（「ローテーション」ページで変更可能）。"),
+                new HelpLine(0, "  • 既定：Ctrl+9 = 次の壁紙、Ctrl+8 = 前の壁紙（「一般」ページで変更可能）。"),
                 new HelpLine(0, "  • メインキーボードとテンキーの数字の両方に対応しています。"),
                 new HelpLine(0, "  • 「前の壁紙」は連続して戻れます。起動時に表示されていた壁紙まで戻れます。"),
                 new HelpLine(0, ""),
