@@ -49,7 +49,10 @@ namespace WallpaperChanger
     //     never triggers work in a tight loop.
     internal class PickerCanvas : ScrollableControl
     {
-        public const int DesignCols = 7;
+        // Five tiles per row, not seven: a 258px tile is the size the new
+        // design reads at, and five of them plus margins is what keeps the
+        // window inside the space the main window leaves for it.
+        public const int DesignCols = 5;
         private const int DesignCellW = 258;
         private const int DesignCellImgH = 145;
         private const int DesignSpacing = 8;

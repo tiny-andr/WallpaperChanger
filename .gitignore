@@ -18,3 +18,6 @@ WallpaperChanger.ini
 
 # temporary UI-driving test harnesses
 .tmp-*/
+
+# design handoff (prototype + assets from the design tool, not shipped)
+design/

@@ -75,6 +75,13 @@ namespace WallpaperChanger
         // window from the palette in Theme.cs.
         public static AppTheme ThemeMode = AppTheme.Light;
 
+        // Last window size, in 96-DPI logical units (0 = never resized, use
+        // the designed size). Storing logical units means the window comes
+        // back the same apparent size when it is reopened on a monitor with
+        // a different scaling factor.
+        public static int WindowWidth = 0;
+        public static int WindowHeight = 0;
+
         // Manual wallpaper picker: the checked file set alone decides the mode.
         // When ManualPicked is non-empty, every forward switch (manual next,
         // auto timer) draws from scanned images that are also in ManualPicked;
@@ -223,6 +230,22 @@ namespace WallpaperChanger
                     int n;
                     if (int.TryParse(v, out n) && n >= -1 && n <= 9) HotkeyPrev = n;
                 }
+                if (single.TryGetValue("window_size", out v))
+                {
+                    // "<w>x<h>" in 96-DPI logical units. Anything malformed,
+                    // absurd or below the floor is dropped so a hand-edited
+                    // config can never produce an unusable window.
+                    int sep = v.IndexOf('x');
+                    int w, h;
+                    if (sep > 0 &&
+                        int.TryParse(v.Substring(0, sep).Trim(), out w) &&
+                        int.TryParse(v.Substring(sep + 1).Trim(), out h) &&
+                        w >= 400 && w <= 10000 && h >= 300 && h <= 10000)
+                    {
+                        WindowWidth = w;
+                        WindowHeight = h;
+                    }
+                }
             }
             catch
             {
@@ -260,6 +283,10 @@ namespace WallpaperChanger
                 sb.AppendLine("recursive=" + (Recursive ? "1" : "0"));
                 sb.AppendLine("hotkey=" + Hotkey);
                 sb.AppendLine("hotkey_prev=" + HotkeyPrev);
+                if (WindowWidth > 0 && WindowHeight > 0)
+                {
+                    sb.AppendLine("window_size=" + WindowWidth + "x" + WindowHeight);
+                }
                 File.WriteAllText(ConfigPath, sb.ToString(), new UTF8Encoding(false));
             }
             catch

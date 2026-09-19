@@ -9,29 +9,62 @@ namespace WallpaperChanger
 {
     public class MainForm : Form
     {
-        private Button btnSources;
-        private Label lblSourceSummary;
-        private Button btnHelp;
-        private Button btnTheme;
-        private ToolTip themeTip;
-        private Button btnManualPick;
-        private ComboBox cmbStyle;
-        private ComboBox cmbInterval;
+        // ---- shell ---------------------------------------------------------
+        private TitleBar bar;
+        private NavRail rail;
+        private StatusBar footer;
+        private Panel content;
+        private readonly List<PageStack> pages = new List<PageStack>();
+
+        // ---- overview page -------------------------------------------------
+        private PreviewBox nowPreview;
+        private KitLabel lblNowName;
+        private KitLabel lblNowPath;
+        private FlatButton btnPrev;
+        private FlatButton btnNext;
+        private KitLabel lblKbdHint;
+        private KitLabel lblStripStyle;
+        private KitLabel lblStripInterval;
+        private KitLabel lblStripOrder;
+        private FlatButton btnAdjust;
+        private HistoryList histList;
+        private readonly KitLabel[] factVal = new KitLabel[3];
+        private readonly KitLabel[] factLab = new KitLabel[3];
+
+        // ---- sources page --------------------------------------------------
+        private CardPanel cardSrc;
+        private SourceList srcList;
+        private KitLabel lblSrcListNote;
+        private FlatButton btnAddFolder;
+        private FlatButton btnManualPick;
+        private FlatButton btnAllOn;
+        private FlatButton btnAllOff;
+        private FlatButton btnRecount;
+        // Bumped on every recount so a scan that is still running when the
+        // list changes cannot write stale counts into the new rows.
+        private int countGeneration;
+
+        // ---- rotate page ---------------------------------------------------
+        private StyleOptionGrid styleGrid;
+        private Label lblIvEcho;
+        private SegmentedControl segInterval;
+        private SegmentedControl segOrder;
+        private KitLabel lblHkNextName;
+        private KitLabel lblHkPrevName;
+        private KitLabel lblHkNext;
+        private KitLabel lblHkPrev;
+        private KeyCapButton keyNext;
+        private KeyCapButton keyPrev;
+
+        // ---- general page --------------------------------------------------
+        private ToggleSwitch swAutoStart;
+        private SegmentedControl segTheme;
         private ComboBox cmbLang;
-        private CheckBox chkRandom;
-        private CheckBox chkAutoStart;
-        private Button btnNext;
-        private Button btnPrev;
-        private Button btnSave;
-        private Label lblStatus;
-        private GroupBox gbSource;
-        private GroupBox gbRotate;
-        private GroupBox gbOther;
-        private Label lblStyle;
-        private Label lblInterval;
-        private Label lblHotkey;
-        private Label lblHotkeyPrev;
-        private Label lblLang;
+        private KitLabel lblAppTitle;
+        private KitLabel lblAppNote;
+        private KitLabel lblCfgPath;
+        private KitLabel lblAbout;
+        private FlatButton btnOpenFolder;
 
         private NotifyIcon notifyIcon;
         private ContextMenuStrip trayMenu;
@@ -41,8 +74,6 @@ namespace WallpaperChanger
         private ToolStripMenuItem miManual;
         private ToolStripMenuItem miOpen;
         private ToolStripMenuItem miExit;
-        private ComboBox cmbHotkey;
-        private ComboBox cmbHotkeyPrev;
         private readonly HotkeyManager hotkeyManager;
 
         private System.Windows.Forms.Timer rotateTimer;
@@ -86,17 +117,32 @@ namespace WallpaperChanger
             this.startHidden = startHidden;
             Text = "WallpaperChanger v" + Application.ProductVersion;
             StartPosition = FormStartPosition.CenterScreen;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
-            MaximizeBox = false;
+            // Borderless, but the system frame style is kept alive so DWM
+            // still hands over the shadow, Aero snap and native maximise.
+            // WM_NCCALCSIZE answers 0, so the client area covers the whole
+            // window and the custom title bar owns the top 46px.
+            FormBorderStyle = FormBorderStyle.None;
+            MaximizeBox = true;
+            MinimizeBox = true;
             // High-DPI support: declare the 96 DPI design basis and let
             // WinForms scale the whole layout proportionally on any monitor.
             // Order matters: the AutoScaleMode setter resets AutoScaleDimensions,
             // so the design basis must be assigned AFTER the mode.
             AutoScaleMode = AutoScaleMode.Dpi;
             AutoScaleDimensions = new SizeF(96F, 96F);
-            ClientSize = new Size(480, 634);
+            // Size, not ClientSize: the window keeps WS_THICKFRAME so DWM still
+            // provides snap and shadow, while WM_NCCALCSIZE suppresses the
+            // frame that WinForms measures. Its idea of the client is therefore
+            // 14px smaller than the area that actually gets painted, and asking
+            // for a 980 client produced a 994 window. Sizing the window itself
+            // is what makes WindowW mean the pixels on screen.
+            Size = new Size(Theme.WindowW, Theme.WindowH);
+            MinimumSize = new Size(Theme.WindowMinW, Theme.WindowMinH);
+            // An invisible band the form keeps for its own hit testing, so
+            // edge resizing still works with child controls covering everything.
+            Padding = new Padding(6);
             Font = new Font("Microsoft YaHei UI", 9F);
-            BackColor = SystemColors.Control;
+            BackColor = Theme.FormBack;
 
             // Suppress all "changed -> save" handlers from the very first
             // control creation (ApplyTexts also touches combo selections).
@@ -130,6 +176,14 @@ namespace WallpaperChanger
                 loadingUi = false;
             }
             SaveFromUi();
+            dirty = false;
+            RefreshDirty();
+            RefreshStrip();
+            SyncRailState();
+            // The source rows show a live wallpaper count, so the first scan
+            // starts as soon as the list exists rather than when the user
+            // happens to open the sources page.
+            StartSourceCounts(false);
 
             if (Config.AutoStart) AutoStartHelper.SetAutoStart(true);
 
@@ -162,113 +216,364 @@ namespace WallpaperChanger
 
         private void BuildUi()
         {
-            gbSource = new GroupBox();
-            gbSource.SetBounds(12, 38, 456, 168);
-            Controls.Add(gbSource);
+            BuildShell();
+            BuildOverviewPage();
+            BuildSourcesPage();
+            BuildRotatePage();
+            BuildGeneralPage();
+            ShowPage(0);
+        }
 
-            // One entry point into the source manager. The old inline list
-            // and its add / remove / clear buttons moved into that dialog,
-            // which also gained per-source enable/disable and image counts.
-            btnSources = new Button();
-            btnSources.SetBounds(15, 40, 426, 46);
-            btnSources.Click += delegate { OpenSourceManager(); };
-            gbSource.Controls.Add(btnSources);
+        // ---- shell ---------------------------------------------------------
 
-            lblSourceSummary = new Label();
-            lblSourceSummary.SetBounds(15, 96, 426, 56);
-            lblSourceSummary.Tag = Theme.RoleMuted;
-            gbSource.Controls.Add(lblSourceSummary);
+        private void BuildShell()
+        {
+            content = new Panel();
+            content.Dock = DockStyle.Fill;
+            content.BackColor = Theme.FormBack;
 
-            // Manual wallpaper picker: opens the selection dialog where the
-            // user curates which wallpapers participate in switching. The
-            // caption doubles as the state readout (off / N selected).
-            btnManualPick = new Button();
-            btnManualPick.SetBounds(12, 212, 456, 32);
+            rail = new NavRail();
+            rail.Dock = DockStyle.Left;
+            rail.Width = Theme.RailW;
+            rail.SelectedIndexChanged += delegate { ShowPage(rail.SelectedIndex); };
+            rail.PauseClicked += delegate { TogglePause(); };
+
+            footer = new StatusBar();
+            footer.Dock = DockStyle.Bottom;
+            footer.Height = Theme.StatusBarH;
+            footer.SaveClicked += delegate { SaveFromFooter(); };
+
+            bar = new TitleBar();
+            bar.Dock = DockStyle.Top;
+            bar.Height = Theme.TitleBarH;
+            bar.AppIcon = AppIconImage();
+            bar.HelpClicked += delegate { new HelpForm().ShowDialog(this); };
+
+            // Dock order is the reverse of the add order: the content host
+            // takes whatever is left once the three edges are claimed.
+            Controls.Add(content);
+            Controls.Add(rail);
+            Controls.Add(footer);
+            Controls.Add(bar);
+        }
+
+        private static Image AppIconImage()
+        {
+            try
+            {
+                using (Icon ico = Icon.ExtractAssociatedIcon(Application.ExecutablePath))
+                {
+                    return ico == null ? null : ico.ToBitmap();
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        // A page is a card stack whose header doubles as the page title.
+        // Passing no keys gives a page that opens straight into its first
+        // card, which is what the overview pane does.
+        private PageStack NewPage(string titleKey, string noteKey)
+        {
+            PageStack p = new PageStack();
+            p.Visible = false;
+            if (titleKey != null)
+            {
+                p.Head.Title = Loc.T(titleKey);
+                p.Head.Note = Loc.T(noteKey);
+            }
+            content.Controls.Add(p);
+            pages.Add(p);
+            return p;
+        }
+
+        private void ShowPage(int index)
+        {
+            if (index < 0 || index >= pages.Count) return;
+            for (int i = 0; i < pages.Count; i++) pages[i].Visible = i == index;
+            if (rail.SelectedIndex != index) rail.SelectedIndex = index;
+        }
+
+        private static KitLabel Txt(LabelStyle style)
+        {
+            return Txt(style, false);
+        }
+
+        private static KitLabel Txt(LabelStyle style, bool muted)
+        {
+            KitLabel l = new KitLabel();
+            l.Style = style;
+            l.Muted = muted;
+            return l;
+        }
+
+        // ---- overview ------------------------------------------------------
+
+        private void BuildOverviewPage()
+        {
+            PageStack page = NewPage(null, null);
+
+            // "正在显示": preview on the left, facts and actions on the right.
+            CardPanel hero = page.AddCard(246);
+            nowPreview = hero.AddChild(new PreviewBox(), 0, 0, 374, 210);
+            nowPreview.EmptyText = Loc.T("ov.preview.none");
+
+            const int rx = 396, rw = 288;
+            lblNowName = hero.AddChild(Txt(LabelStyle.PreviewName), rx, 4, rw, 30);
+            lblNowPath = hero.AddChild(Txt(LabelStyle.MonoSm, true), rx, 38, rw, 18);
+            hero.AddChild(new Rule(), rx, 64, rw, 1);
+
+            string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
+            for (int i = 0; i < 3; i++)
+            {
+                factVal[i] = hero.AddChild(Txt(LabelStyle.StatNum), rx + i * 96, 78, 92, 22);
+                factVal[i].Text = "0";
+                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + i * 96, 100, 92, 16);
+                factLab[i].Text = Loc.T(factKeys[i]);
+            }
+
+            btnPrev = hero.AddChild(new FlatButton(), rx, 126, 110, Theme.BtnH);
+            btnPrev.Kind = BtnKind.Secondary;
+            btnPrev.Icon = IconKind.ArrowLeft;
+            btnPrev.Click += delegate { PrevWallpaper(); };
+
+            btnNext = hero.AddChild(new FlatButton(), rx + 119, 126, rw - 119, Theme.BtnH);
+            btnNext.Kind = BtnKind.Primary;
+            btnNext.Icon = IconKind.ArrowRight;
+            btnNext.IconTrailing = true;
+            btnNext.Click += delegate { NextWallpaper(); };
+
+            lblKbdHint = hero.AddChild(Txt(LabelStyle.Cap, true), rx, 174, rw, 18);
+
+            // Summary strip: the three settings that decide what gets shown,
+            // as a read-only echo of the rotate page.
+            CardPanel strip = page.AddCard(66);
+            lblStripStyle = StripPair(strip, 4, "ov.strip.style");
+            lblStripInterval = StripPair(strip, 192, "ov.strip.interval");
+            lblStripOrder = StripPair(strip, 380, "ov.strip.order");
+            btnAdjust = strip.AddChild(new FlatButton(), 590, 17, 94, Theme.BtnSmallH);
+            btnAdjust.Kind = BtnKind.Ghost;
+            btnAdjust.Compact = true;
+            btnAdjust.Click += delegate { ShowPage(2); };
+
+            // Switch history. The rows come from the history + forward model,
+            // not from a log of this run.
+            CardPanel hist = page.AddCard(384);
+            hist.Title = Loc.T("hist.title");
+            hist.Note = Loc.T("hist.note");
+
+            histList = hist.AddChild(new HistoryList(), 0, 0, 684, 300);
+            histList.RowH = 47;
+            histList.CurrentTag = Loc.T("hist.cur");
+            histList.UndoableTag = Loc.T("hist.undoable");
+            histList.BackTag = Loc.T("hist.back");
+            histList.EmptyText = Loc.T("hist.empty");
+            histList.ItemClicked += delegate { OnHistoryRowClicked(); };
+        }
+
+        private KitLabel StripPair(CardPanel card, int x, string key)
+        {
+            KitLabel k = card.AddChild(Txt(LabelStyle.Cap, true), x, 6, 180, 16);
+            k.Text = Loc.T(key);
+            KitLabel v = card.AddChild(Txt(LabelStyle.BodyBold), x, 22, 180, 20);
+            return v;
+        }
+
+        // ---- sources -------------------------------------------------------
+
+        private void BuildSourcesPage()
+        {
+            PageStack page = NewPage("nav.sources", "src.page.note");
+
+            btnAddFolder = page.Head.AddAction(new FlatButton(), 150);
+            btnAddFolder.Kind = BtnKind.Secondary;
+            btnAddFolder.Icon = IconKind.Plus;
+            btnAddFolder.Click += delegate { AddSourceFolder(); };
+
+            // The list card carries no height of its own worth speaking of: the
+            // list reports what it needs and CardPanel.ContentHeight grows the
+            // card to match, so adding a source makes the card taller instead
+            // of hiding the last row.
+            cardSrc = page.AddCard(80);
+            cardSrc.Title = Loc.T("src.list.title");
+
+            srcList = cardSrc.AddChild(new SourceList(), 0, 0, 684, 120);
+            srcList.Changed += delegate { OnSourcesEdited(); };
+
+            // Everything that is not the list: what the counts mean and the
+            // bulk actions.
+            CardPanel acts = page.AddCard(120);
+            lblSrcListNote = acts.AddChild(Txt(LabelStyle.CardNote, true), 0, 0, 684, 36);
+            lblSrcListNote.Wrap = true;
+            lblSrcListNote.Text = Loc.T("src.footnote");
+            acts.AddChild(new Rule(), 0, 46, 684, 1);
+
+            btnManualPick = acts.AddChild(new FlatButton(), 0, 62, 210, Theme.BtnH);
+            btnManualPick.Kind = BtnKind.Secondary;
+            btnManualPick.Icon = IconKind.Grid;
             btnManualPick.Click += delegate { OpenManualPicker(); };
-            Controls.Add(btnManualPick);
 
-            gbRotate = new GroupBox();
-            gbRotate.SetBounds(12, 252, 456, 170);
-            Controls.Add(gbRotate);
+            btnAllOn = acts.AddChild(new FlatButton(), 300, 62, 120, Theme.BtnSmallH);
+            btnAllOn.Kind = BtnKind.Ghost;
+            btnAllOn.Compact = true;
+            btnAllOn.Click += delegate { srcList.SetAll(true); OnSourcesEdited(); };
 
-            lblStyle = new Label();
-            lblStyle.SetBounds(15, 28, 74, 22);
-            gbRotate.Controls.Add(lblStyle);
+            btnAllOff = acts.AddChild(new FlatButton(), 428, 62, 120, Theme.BtnSmallH);
+            btnAllOff.Kind = BtnKind.Ghost;
+            btnAllOff.Compact = true;
+            btnAllOff.Click += delegate { srcList.SetAll(false); OnSourcesEdited(); };
 
-            cmbStyle = new ComboBox();
-            cmbStyle.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbStyle.SetBounds(92, 25, 170, 25);
-            cmbStyle.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; RestartTimer(); };
-            gbRotate.Controls.Add(cmbStyle);
+            btnRecount = acts.AddChild(new FlatButton(), 556, 62, 128, Theme.BtnSmallH);
+            btnRecount.Kind = BtnKind.Ghost;
+            btnRecount.Compact = true;
+            btnRecount.Icon = IconKind.Rotate;
+            btnRecount.Click += delegate { StartSourceCounts(true); };
+        }
 
-            lblInterval = new Label();
-            lblInterval.SetBounds(15, 62, 74, 22);
-            gbRotate.Controls.Add(lblInterval);
+        // ---- rotate --------------------------------------------------------
 
-            cmbInterval = new ComboBox();
-            cmbInterval.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbInterval.SetBounds(92, 59, 170, 25);
-            cmbInterval.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; RestartTimer(); };
-            gbRotate.Controls.Add(cmbInterval);
+        private void BuildRotatePage()
+        {
+            PageStack page = NewPage("nav.rotate", "rot.page.note");
 
-            chkRandom = new CheckBox();
-            chkRandom.SetBounds(15, 96, 220, 22);
-            chkRandom.Checked = true;
-            chkRandom.CheckedChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; };
-            gbRotate.Controls.Add(chkRandom);
+            CardPanel cardStyle = page.AddCard(490);
+            cardStyle.Title = Loc.T("ov.strip.style");
+            cardStyle.Note = Loc.T("rot.style.note");
 
-            lblHotkey = new Label();
-            lblHotkey.SetBounds(15, 133, 52, 22);
-            gbRotate.Controls.Add(lblHotkey);
-
-            cmbHotkey = new ComboBox();
-            cmbHotkey.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbHotkey.SetBounds(67, 129, 128, 25);
-            cmbHotkey.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; ApplyHotkey(); };
-            gbRotate.Controls.Add(cmbHotkey);
-
-            lblHotkeyPrev = new Label();
-            lblHotkeyPrev.SetBounds(202, 133, 52, 22);
-            gbRotate.Controls.Add(lblHotkeyPrev);
-
-            cmbHotkeyPrev = new ComboBox();
-            cmbHotkeyPrev.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbHotkeyPrev.SetBounds(254, 129, 150, 25);
-            cmbHotkeyPrev.SelectedIndexChanged += delegate { if (loadingUi) return; ApplyFromUi(); dirty = true; ApplyHotkey(); };
-            gbRotate.Controls.Add(cmbHotkeyPrev);
-
-            // Everything that is not about rotation lives in its own box:
-            // starting with Windows and the interface language.
-            gbOther = new GroupBox();
-            gbOther.SetBounds(12, 430, 456, 96);
-            Controls.Add(gbOther);
-
-            chkAutoStart = new CheckBox();
-            chkAutoStart.SetBounds(15, 26, 426, 22);
-            chkAutoStart.CheckedChanged += delegate
+            styleGrid = cardStyle.AddChild(new StyleOptionGrid(), 0, 0, 684, 406);
+            styleGrid.Columns = 3;
+            styleGrid.CellH = 198;
+            styleGrid.Items = Loc.StyleNames();
+            styleGrid.SelectedIndexChanged += delegate
             {
                 if (loadingUi) return;
                 ApplyFromUi();
                 dirty = true;
+                RefreshDirty();
+                RestartTimer();
+            };
+
+            // The interval control wraps when it has to, so the card has to
+            // ask for the height the control will actually need.
+            SegmentedControl segIv = new SegmentedControl();
+            segIv.Items = Loc.IntervalNames();
+            int ivH = segIv.MeasureHeight(684);
+
+            CardPanel cardInterval = page.AddCard(18 + 48 + ivH + 18);
+            cardInterval.Title = Loc.T("ov.strip.interval");
+            cardInterval.Note = Loc.T("rot.interval.note");
+            lblIvEcho = cardInterval.AddHeaderControl(new Label(), 180, 18);
+            lblIvEcho.Tag = Theme.RoleMuted;
+            lblIvEcho.TextAlign = ContentAlignment.MiddleRight;
+
+            segInterval = cardInterval.AddChild(segIv, 0, 0, 684, ivH);
+            segInterval.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
+                RestartTimer();
+            };
+
+            SegmentedControl segOrd = new SegmentedControl();
+            segOrd.Items = new string[] { Loc.T("ov.order.random"), Loc.T("ov.order.inorder") };
+
+            CardPanel cardOrder = page.AddCard(84);
+            cardOrder.Title = Loc.T("rot.order.title");
+            cardOrder.Note = Loc.T("rot.order.note");
+            segOrder = cardOrder.AddHeaderControl(segOrd, 168, 34);
+            segOrder.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
+            };
+
+            CardPanel cardHk = page.AddCard(184);
+            cardHk.Title = Loc.T("rot.hotkeys.title");
+            cardHk.Note = Loc.T("rot.hotkeys.note");
+
+            lblHkNextName = cardHk.AddChild(Txt(LabelStyle.BodyBold), 0, 6, 320, 20);
+            lblHkNext = cardHk.AddChild(Txt(LabelStyle.Cap, true), 0, 26, 320, 16);
+            keyNext = cardHk.AddChild(new KeyCapButton(), 554, 6, 130, Theme.KbdH);
+            keyNext.NoneText = Loc.T("main.hotkey.none");
+            keyNext.CaptureText = Loc.T("rot.keycap.capture");
+            keyNext.Captured += delegate
+            {
+                Config.Hotkey = keyNext.Value;
+                Config.Save();
+                ApplyHotkey();
+            };
+
+            cardHk.AddChild(new Rule(), 0, 50, 684, 1);
+
+            lblHkPrevName = cardHk.AddChild(Txt(LabelStyle.BodyBold), 0, 60, 320, 20);
+            lblHkPrev = cardHk.AddChild(Txt(LabelStyle.Cap, true), 0, 80, 320, 16);
+            keyPrev = cardHk.AddChild(new KeyCapButton(), 554, 60, 130, Theme.KbdH);
+            keyPrev.NoneText = Loc.T("main.hotkey.none");
+            keyPrev.CaptureText = Loc.T("rot.keycap.capture");
+            keyPrev.Captured += delegate
+            {
+                Config.HotkeyPrev = keyPrev.Value;
+                Config.Save();
+                ApplyHotkey();
+            };
+        }
+
+        // ---- general -------------------------------------------------------
+
+        private void BuildGeneralPage()
+        {
+            PageStack page = NewPage("nav.general", "gen.page.note");
+
+            CardPanel cardStart = page.AddCard(162);
+            cardStart.Title = Loc.T("gen.startup.title");
+            cardStart.Note = Loc.T("gen.startup.note");
+
+            swAutoStart = cardStart.AddHeaderControl(new ToggleSwitch(), Theme.SwitchW, Theme.SwitchH);
+            swAutoStart.CheckedChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
                 AutoStartHelper.SetAutoStart(Config.AutoStart);
             };
-            gbOther.Controls.Add(chkAutoStart);
 
-            // UI language selector: native names (中文 / English / 日本語),
-            // applied immediately and persisted at once.
-            lblLang = new Label();
-            lblLang.AutoSize = true;
-            lblLang.SetBounds(15, 59, 0, 22);
-            gbOther.Controls.Add(lblLang);
-            lblLang.Text = Loc.T("main.settings.language");
+            cardStart.AddChild(new Rule(), 0, 0, 684, 1);
 
-            cmbLang = new ComboBox();
+            lblAppTitle = cardStart.AddChild(Txt(LabelStyle.BodyBold), 0, 16, 440, 20);
+            lblAppNote = cardStart.AddChild(Txt(LabelStyle.CardNote, true), 0, 38, 440, 36);
+            lblAppNote.Wrap = true;
+
+            SegmentedControl segTh = new SegmentedControl();
+            segTh.Items = new string[] { Loc.T("gen.light"), Loc.T("gen.dark") };
+            // Pinned right rather than placed at x=484: that absolute spot only
+            // works while the card body is the design's 684 wide. On a narrow
+            // window the control was squeezed to 65px and the labels vanished.
+            segTheme = cardStart.AddRightChild(segTh, 24, 200, 34);
+            segTheme.SelectedIndexChanged += delegate
+            {
+                if (loadingUi) return;
+                AppTheme want = segTheme.SelectedIndex == 1 ? AppTheme.Dark : AppTheme.Light;
+                if (want == Theme.Current) return;
+                SetThemeMode(want);
+            };
+
+            CardPanel cardLang = page.AddCard(84);
+            cardLang.Title = Loc.T("gen.language.title");
+            cardLang.Note = Loc.T("gen.language.note");
+
+            cmbLang = cardLang.AddHeaderControl(new ComboBox(), 180, 30);
             cmbLang.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbLang.SetBounds(110, 55, 170, 25);
             cmbLang.Items.AddRange(Loc.LanguageDisplayNames);
-            // Leave "no selection" here: the real index comes from the saved
-            // language in SyncLanguageCombo(). Selecting 0 unconditionally made
-            // the box read 中文 even when the UI started up in English.
+            // Leave "no selection": the real index comes from the saved
+            // language in SyncLanguageCombo(). Selecting 0 unconditionally
+            // made the box read 中文 even when the UI started up in English.
             cmbLang.SelectedIndexChanged += delegate
             {
                 if (loadingUi) return;
@@ -276,51 +581,18 @@ namespace WallpaperChanger
                 if (i < 0 || i >= Loc.LanguageCodes.Length) return;
                 ChangeLanguage(Loc.LanguageCodes[i]);
             };
-            gbOther.Controls.Add(cmbLang);
 
-            btnNext = new Button();
-            btnNext.SetBounds(118, 538, 100, 32);
-            btnNext.Click += delegate { NextWallpaper(); };
-            Controls.Add(btnNext);
+            CardPanel cardCfg = page.AddCard(156);
+            cardCfg.Title = Loc.T("gen.config.title");
 
-            btnPrev = new Button();
-            btnPrev.SetBounds(12, 538, 100, 32);
-            btnPrev.Click += delegate { PrevWallpaper(); };
-            Controls.Add(btnPrev);
+            btnOpenFolder = cardCfg.AddHeaderControl(new FlatButton(), 160, Theme.BtnSmallH);
+            btnOpenFolder.Kind = BtnKind.Secondary;
+            btnOpenFolder.Compact = true;
+            btnOpenFolder.Click += delegate { OpenConfigFolder(); };
 
-            btnSave = new Button();
-            btnSave.SetBounds(224, 538, 100, 32);
-            btnSave.Click += delegate
-            {
-                SaveFromUi();
-                dirty = false;
-                SetStatus(delegate { return Loc.T("status.saved"); });
-                notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.saved"), ToolTipIcon.Info);
-            };
-            Controls.Add(btnSave);
-
-            btnHelp = new Button();
-            btnHelp.SetBounds(330, 538, 100, 32);
-            btnHelp.Click += delegate { new HelpForm().ShowDialog(this); };
-            Controls.Add(btnHelp);
-
-            // Theme switch: a 26x26 glyph in the top-right corner. It is
-            // deliberately tiny - the window is dense and this is a
-            // set-and-forget control, not a primary action.
-            btnTheme = new ThemeToggleButton();
-            btnTheme.SetBounds(442, 8, 26, 26);
-            btnTheme.Click += delegate { ToggleTheme(); };
-            Controls.Add(btnTheme);
-
-            themeTip = new ToolTip();
-            themeTip.AutoPopDelay = 6000;
-            themeTip.InitialDelay = 300;
-            themeTip.ReshowDelay = 200;
-
-            lblStatus = new Label();
-            lblStatus.SetBounds(12, 580, 456, 44);
-            lblStatus.Tag = Theme.RoleAccentText;
-            Controls.Add(lblStatus);
+            lblCfgPath = cardCfg.AddChild(Txt(LabelStyle.MonoSm, true), 0, 4, 684, 18);
+            cardCfg.AddChild(new Rule(), 0, 44, 684, 1);
+            lblAbout = cardCfg.AddChild(Txt(LabelStyle.CardNote, true), 0, 58, 684, 18);
         }
 
         // Re-apply every user-visible string of this form (and the tray) in
@@ -329,30 +601,70 @@ namespace WallpaperChanger
         // needed. Combo selections survive the item rebuilds.
         private void ApplyTexts()
         {
-            gbSource.Text = Loc.T("main.source.group");
-            btnSources.Text = Loc.T("main.source.manage");
-            RefreshManualPickText();
-            gbRotate.Text = Loc.T("main.settings.group");
-            lblStyle.Text = Loc.T("main.settings.style");
-            lblInterval.Text = Loc.T("main.settings.interval");
-            chkRandom.Text = Loc.T("main.settings.random");
-            lblHotkey.Text = Loc.T("main.settings.next");
-            lblHotkeyPrev.Text = Loc.T("main.settings.prev");
-            gbOther.Text = Loc.T("main.other.group");
-            chkAutoStart.Text = Loc.T("main.settings.autostart");
-            lblLang.Text = Loc.T("main.settings.language");
-            btnNext.Text = Loc.T("main.btn.next");
-            btnPrev.Text = Loc.T("main.btn.prev");
-            btnSave.Text = Loc.T("main.btn.save");
-            btnHelp.Text = Loc.T("main.btn.help");
-            if (themeTip != null && btnTheme != null)
-                themeTip.SetToolTip(btnTheme, Loc.T("main.theme.tip"));
+            // ---- shell
+            rail.Items = new string[] {
+                Loc.T("nav.overview"), Loc.T("nav.sources"),
+                Loc.T("nav.rotate"), Loc.T("nav.general") };
+            rail.Icons = new IconKind[] {
+                IconKind.Grid, IconKind.Folder, IconKind.Rotate, IconKind.Gear };
+            rail.PauseText = rotateTimer != null && !rotateTimer.Enabled
+                ? Loc.T("rail.resume") : Loc.T("rail.pause");
+            rail.DotCaption = rotateTimer != null && rotateTimer.Enabled
+                ? Loc.T("rail.rotating") : Loc.T("rail.paused");
+            rail.CountdownCaption = Loc.T("rail.next");
+            bar.VersionText = "v" + Application.ProductVersion;
+            bar.HelpText = Loc.T("win.help");
+            footer.DirtyText = Loc.T("sb.dirty");
+            footer.SaveText = Loc.T("main.btn.save");
+
+            // ---- overview
+            nowPreview.Pill = Loc.T("ov.now.showing");
+            nowPreview.EmptyText = Loc.T("ov.preview.none");
+            btnPrev.Text = Loc.T("ov.prev");
+            btnNext.Text = Loc.T("ov.next");
+            lblKbdHint.Text = KbdHintText();
+            btnAdjust.Text = Loc.T("ov.strip.adjust");
+            string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
+            for (int i = 0; i < 3; i++) factLab[i].Text = Loc.T(factKeys[i]);
+            histList.CurrentTag = Loc.T("hist.cur");
+            histList.UndoableTag = Loc.T("hist.undoable");
+            histList.BackTag = Loc.T("hist.back");
+            histList.EmptyText = Loc.T("hist.empty");
+            RebuildHistory();
+            RefreshStrip();
+
+            // ---- sources
+            btnAddFolder.Text = Loc.T("src.add.folder");
+            btnManualPick.Text = Loc.T("src.manual");
+            btnAllOn.Text = Loc.T("src.allon");
+            btnAllOff.Text = Loc.T("src.alloff");
+            btnRecount.Text = Loc.T("src.refresh");
+            lblSrcListNote.Text = Loc.T("src.footnote");
+            srcList.EmptyText = Loc.T("src.empty");
+            srcList.PendingText = Loc.T("src.count.pending");
+            srcList.UnavailableText = Loc.T("src.count.unavailable");
             RefreshSourceSummary();
 
-            SetComboItems(cmbStyle, Loc.StyleNames());
-            SetComboItems(cmbInterval, Loc.IntervalNames());
-            SetComboItems(cmbHotkey, HotkeyItems());
-            SetComboItems(cmbHotkeyPrev, HotkeyItems());
+            // ---- rotate
+            styleGrid.Items = Loc.StyleNames();
+            SetSegItems(segInterval, Loc.IntervalNames());
+            SetSegItems(segOrder, new string[] { Loc.T("ov.order.random"), Loc.T("ov.order.inorder") });
+            lblHkNextName.Text = Loc.T("main.btn.next");
+            lblHkPrevName.Text = Loc.T("main.btn.prev");
+            lblHkNext.Text = Loc.T("rot.hk.note.next");
+            lblHkPrev.Text = Loc.T("rot.hk.note.prev");
+            keyNext.NoneText = Loc.T("main.hotkey.none");
+            keyPrev.NoneText = Loc.T("main.hotkey.none");
+            keyNext.CaptureText = Loc.T("rot.keycap.capture");
+            keyPrev.CaptureText = Loc.T("rot.keycap.capture");
+
+            // ---- general
+            lblAppTitle.Text = Loc.T("gen.appearance");
+            lblAppNote.Text = Loc.T("gen.appearance.note");
+            SetSegItems(segTheme, new string[] { Loc.T("gen.light"), Loc.T("gen.dark") });
+            btnOpenFolder.Text = Loc.T("gen.open.folder");
+            lblCfgPath.Text = ConfigPathText();
+            lblAbout.Text = Loc.F("gen.about.line", Application.ProductVersion, SupportedFormats());
 
             miNext.Text = Loc.T("tray.next");
             miPrev.Text = Loc.T("tray.prev");
@@ -369,22 +681,45 @@ namespace WallpaperChanger
             RefreshStatusLine();
         }
 
-        private static string[] HotkeyItems()
+        // The design shows the two bindings inline under the hero actions.
+        private string KbdHintText()
         {
-            List<string> items = new List<string>();
-            items.Add(Loc.T("main.hotkey.none"));
-            for (int d = 0; d <= 9; d++) items.Add("Ctrl+" + d);
-            return items.ToArray();
+            return Loc.F("ov.kbd.hint",
+                KeyName(Config.Hotkey, 9), KeyName(Config.HotkeyPrev, 8));
         }
 
-        // Replace a DropDownList's items while keeping the selection.
-        private static void SetComboItems(ComboBox cmb, string[] items)
+        private static string KeyName(int digit, int fallback)
         {
-            if (cmb == null) return;
-            int sel = cmb.SelectedIndex;
-            cmb.Items.Clear();
-            cmb.Items.AddRange(items);
-            if (sel >= 0 && sel < items.Length) cmb.SelectedIndex = sel;
+            int d = digit >= 0 ? digit : fallback;
+            return "Ctrl+" + d;
+        }
+
+        // Replace a SegmentedControl's items while keeping the selection.
+        // The control can change row count when its labels change language,
+        // so the caller is expected to re-measure afterwards.
+        private static void SetSegItems(SegmentedControl seg, string[] items)
+        {
+            if (seg == null) return;
+            int sel = seg.SelectedIndex;
+            seg.Items = items;
+            if (sel >= 0 && sel < items.Length) seg.SelectedIndex = sel;
+        }
+
+        private static string ConfigPathText()
+        {
+            try
+            {
+                return Path.Combine(AppPaths.DataDir, "WallpaperChanger.ini");
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
+        private static string SupportedFormats()
+        {
+            return "jpg / png / jfif / bmp / webp / gif / tiff";
         }
 
         // Switch the whole UI language at runtime: update Loc, remember it
@@ -421,16 +756,29 @@ namespace WallpaperChanger
             ApplyTexts();
         }
 
-        // Flip the colour scheme and remember it right away - like the
+        // Set the colour scheme and remember it right away - like the
         // language, a theme click is an unambiguous one-click decision, so it
         // does not wait for the save button.
-        private void ToggleTheme()
+        private void SetThemeMode(AppTheme next)
         {
-            AppTheme next = Theme.IsDark ? AppTheme.Light : AppTheme.Dark;
             Theme.Set(next);
             Config.ThemeMode = next;
             Config.Save();
             ApplyTheme();
+            SyncThemeSeg();
+        }
+
+        // Point the appearance segments at the theme actually in effect
+        // without re-entering the change handler.
+        private void SyncThemeSeg()
+        {
+            if (segTheme == null) return;
+            int want = Theme.IsDark ? 1 : 0;
+            if (segTheme.SelectedIndex == want) return;
+            bool prev = loadingUi;
+            loadingUi = true;
+            try { segTheme.SelectedIndex = want; }
+            finally { loadingUi = prev; }
         }
 
         // Repaint this window (and the tray menu) from the current palette.
@@ -439,7 +787,6 @@ namespace WallpaperChanger
             Theme.ApplyTo(this);
             Theme.ApplyMenuStrip(trayMenu);
             Theme.SetTitleBar(this);
-            if (btnTheme != null) btnTheme.Invalidate();
             Invalidate(true);
         }
 
@@ -509,56 +856,233 @@ namespace WallpaperChanger
             }
         }
 
-        // Open the source manager (modal). It persists to Config on its own
-        // save button, so here we only refresh the summary and restart the
-        // timer; the first valid source also kicks off a wallpaper swap.
-        private void OpenSourceManager()
+        // "Add folder" straight from the sources page. The list on that page is
+        // the editor now, so this only appends a row; the footer's save button
+        // is what writes it to disk, like every other setting.
+        private void AddSourceFolder()
+        {
+            using (FolderBrowserDialog dlg = new FolderBrowserDialog())
+            {
+                dlg.Description = Loc.T("dialog.pickfolder");
+                foreach (string f in srcList.Sources)
+                {
+                    if (Directory.Exists(f)) { dlg.SelectedPath = f; break; }
+                }
+                if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+                string folder = dlg.SelectedPath;
+                if (!srcList.AddSource(folder))
+                {
+                    SetStatus(delegate { return Loc.T("status.folder.dup"); });
+                    return;
+                }
+                OnSourcesEdited();
+                StartSourceCounts(false);
+                SetStatus(delegate { return Loc.F("status.folder.added", folder); });
+            }
+        }
+
+        // A row was toggled or removed. The list is the working copy, so there
+        // is nothing to read back yet - only something to save.
+        private void OnSourcesEdited()
+        {
+            if (loadingUi) return;
+            dirty = true;
+            RefreshDirty();
+            RefreshSourceSummary();
+        }
+
+        // Count the wallpapers in every source that does not have a count yet,
+        // one folder at a time on a background thread. force clears the known
+        // counts first, so the "recount" button re-reads the folders that were
+        // scanned when the window opened.
+        private void StartSourceCounts(bool force)
+        {
+            if (srcList == null) return;
+            if (force) srcList.ClearCounts();
+
+            List<string> todo = new List<string>();
+            foreach (string f in srcList.Sources)
+            {
+                if (srcList.IsPending(f)) todo.Add(f);
+            }
+            RefreshSourceSummary();
+            if (todo.Count == 0) return;
+
+            bool recursive = Config.Recursive;
+            int gen = ++countGeneration;
+            Task.Run(delegate
+            {
+                foreach (string f in todo)
+                {
+                    int n;
+                    try
+                    {
+                        n = Directory.Exists(f) ? ImageScanner.Scan(f, recursive).Count : -1;
+                    }
+                    catch
+                    {
+                        n = -1;
+                    }
+                    int val = n;
+                    SafeUi(delegate
+                    {
+                        if (gen != countGeneration || srcList == null) return;
+                        srcList.SetCount(f, val);
+                        RefreshSourceSummary();
+                    });
+                }
+            });
+        }
+
+        // Reveal the folder holding the ini and the logs.
+        private void OpenConfigFolder()
+        {
+            try
+            {
+                string dir = AppPaths.DataDir;
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                System.Diagnostics.Process.Start("explorer.exe", "\"" + dir + "\"");
+            }
+            catch (Exception ex)
+            {
+                SetStatus(delegate { return Loc.F("status.error", ex.Message); });
+            }
+        }
+
+        // Save from the status bar. The status bar is the only place the save
+        // action lives now, so it also owns clearing the dirty flag.
+        private void SaveFromFooter()
         {
             bool hadValid = HasValidFolders();
-            bool changed;
-            using (SourceManagerForm dlg = new SourceManagerForm(this))
-            {
-                dlg.ShowDialog(this);
-                changed = dlg.Changed;
-            }
-            if (!changed) return;
-            RefreshSourceSummary();
+            SaveFromUi();
+            dirty = false;
+            RefreshDirty();
+            SetStatus(delegate { return Loc.T("status.saved"); });
+            // A source may have been added or switched back on, and the list on
+            // the sources page is only collected at save time - so this is
+            // where a new pool starts being used. Counts are re-read for the
+            // rows that have never been scanned.
             RestartTimer();
+            StartSourceCounts(false);
+            RefreshSourceSummary();
             if (!hadValid && HasValidFolders()) NextWallpaper();
+            notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.saved"), ToolTipIcon.Info);
         }
 
-        // The picker button shows the live manual-selection state, so the mode
-        // is visible without opening the dialog.
-        private void RefreshManualPickText()
+        // Primary-action mutex: while there is nothing to save, the save
+        // button steps back and the page's own primary action (下一张壁纸)
+        // stays the visual anchor. Once something is dirty the two swap.
+        private void RefreshDirty()
         {
-            if (btnManualPick == null) return;
-            int n = Config.ManualPicked.Count;
-            btnManualPick.Text = n > 0
-                ? Loc.F("main.manual.btn.on", n)
-                : Loc.T("main.manual.btn");
+            if (footer != null)
+            {
+                footer.DirtyText = Loc.T("sb.dirty");
+                footer.SaveText = Loc.T("main.btn.save");
+                footer.Dirty = dirty;
+            }
+            if (btnNext != null)
+            {
+                btnNext.Kind = dirty ? BtnKind.Secondary : BtnKind.Primary;
+            }
         }
 
-        // Summary under the manager button: how many sources exist and how many
-        // are enabled. Which ones are disabled is deliberately not listed here;
-        // the manager dialog shows that per row.
+        // The overview echo of the three rotation settings.
+        private void RefreshStrip()
+        {
+            if (lblStripStyle == null) return;
+            string[] names = Loc.StyleNames();
+            int si = (int)Config.Style;
+            lblStripStyle.Text = (si >= 0 && si < names.Length) ? names[si] : "";
+            string[] ivs = Loc.IntervalNames();
+            int ii = IndexOfInterval(Config.IntervalMinutes);
+            lblStripInterval.Text = (ii >= 0 && ii < ivs.Length) ? ivs[ii] : "";
+            lblStripOrder.Text = Config.RandomOrder ? Loc.T("ov.order.random") : Loc.T("ov.order.inorder");
+        }
+
+        // ---- "now showing" card ---------------------------------------------
+
+        private readonly HashSet<string> previewRequested =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private string lastPreviewPath;
+
+        private void RefreshNowCard()
+        {
+            if (nowPreview == null) return;
+
+            string cur = history.Count > 0 ? history[history.Count - 1] : null;
+            bool has = !string.IsNullOrEmpty(cur);
+            bool manual = Config.ManualPicked.Count > 0;
+
+            factVal[0].Text = (manual ? Config.ManualPicked.Count : lastTotal).ToString();
+            factVal[1].Text = lastTotal.ToString();
+            factVal[2].Text = manual ? Loc.T("ov.mode.manual") : Loc.T("ov.mode.all");
+
+            lblNowName.Text = has ? Path.GetFileName(cur) : Loc.T("ov.preview.none");
+            lblNowName.Ink = has ? (Color?)null : Theme.ForeMuted;
+            lblNowPath.Text = has ? cur : "";
+            lblKbdHint.Text = KbdHintText();
+
+            if (!has)
+            {
+                nowPreview.Image = null;
+                lastPreviewPath = null;
+                return;
+            }
+            if (string.Equals(cur, lastPreviewPath, StringComparison.OrdinalIgnoreCase)) return;
+            lastPreviewPath = cur;
+            nowPreview.Image = PreviewThumb(cur);
+        }
+
+        // The preview needs a 16:9-ish thumbnail at the box's own size. One
+        // is generated on a background thread the first time a wallpaper is
+        // shown, then it comes straight from the disk cache.
+        private Image PreviewThumb(string path)
+        {
+            Bitmap b = ThumbCache.Get(path, 374, 210);
+            if (b != null) return b;
+            if (previewRequested.Add(path))
+            {
+                Task.Run(delegate
+                {
+                    try { ThumbCache.Generate(path, 374, 210); }
+                    catch { }
+                    SafeUi(delegate
+                    {
+                        lastPreviewPath = null;
+                        RefreshNowCard();
+                    });
+                });
+            }
+            return null;
+        }
+
+        // Live echo on the sources card header: how many sources exist, how
+        // many are on, and how many images they hold in total. It reads the
+        // list, not the config, because the list is what the user is editing
+        // before the save button writes anything.
         private void RefreshSourceSummary()
         {
-            if (lblSourceSummary == null) return;
-            int total = Config.Folders.Count;
+            if (cardSrc == null || srcList == null) return;
+            int total = srcList.SourceCount;
             if (total == 0)
             {
-                lblSourceSummary.Text = Loc.T("main.source.summary.none");
+                cardSrc.Note = Loc.T("main.source.summary.none");
                 return;
             }
             int off = 0;
-            foreach (string f in Config.Folders)
+            long sum = 0;
+            bool pending = false;
+            foreach (string f in srcList.Sources)
             {
-                if (!Config.IsSourceEnabled(f)) off++;
+                bool on = srcList.IsOn(f);
+                if (!on) off++;
+                if (srcList.IsPending(f)) { pending = true; continue; }
+                int n = srcList.CountOf(f);
+                if (n >= 0 && on) sum += n;
             }
-            string head = Loc.F("main.source.summary", total, total - off, off);
-            if (off == 0)
-                head += "\r\n" + Loc.T("main.source.all.on");
-            lblSourceSummary.Text = head;
+            cardSrc.Note = Loc.F("src.summary", total, total - off, off,
+                pending ? Loc.T("src.count.pending") : sum.ToString());
         }
 
         private static string SourceName(string folder)
@@ -574,17 +1098,51 @@ namespace WallpaperChanger
             return folder;
         }
 
+        // Which configured source a wallpaper came from, for the history
+        // rows. Falls back to a neutral label rather than showing a path.
+        private string SourceOf(string file)
+        {
+            try
+            {
+                string full = Path.GetFullPath(file);
+                string best = null;
+                foreach (string f in Config.Folders)
+                {
+                    string root;
+                    try { root = Path.GetFullPath(f); }
+                    catch { continue; }
+                    if (full.StartsWith(root.TrimEnd('\\', '/') + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (best == null || root.Length > best.Length) best = f;
+                    }
+                }
+                if (best != null) return SourceName(best);
+            }
+            catch
+            {
+            }
+            return Loc.T("hist.unknown.src");
+        }
+
         private void LoadSettingsIntoUi()
         {
+            HashSet<string> off = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string d in Config.DisabledFolders)
+            {
+                if (d != null) off.Add(d.Trim());
+            }
+            srcList.SetSources(new List<string>(Config.Folders), off);
             RefreshSourceSummary();
             SyncLanguageCombo();
-            cmbStyle.SelectedIndex = (int)Config.Style;
+            styleGrid.SelectedIndex = (int)Config.Style;
             int idx = IndexOfInterval(Config.IntervalMinutes);
-            cmbInterval.SelectedIndex = idx >= 0 ? idx : 2;
-            chkRandom.Checked = Config.RandomOrder;
-            chkAutoStart.Checked = Config.AutoStart;
-            cmbHotkey.SelectedIndex = (Config.Hotkey >= 0 && Config.Hotkey <= 9) ? Config.Hotkey + 1 : 0;
-            cmbHotkeyPrev.SelectedIndex = (Config.HotkeyPrev >= 0 && Config.HotkeyPrev <= 9) ? Config.HotkeyPrev + 1 : 0;
+            segInterval.SelectedIndex = idx >= 0 ? idx : 2;
+            segOrder.SelectedIndex = Config.RandomOrder ? 0 : 1;
+            swAutoStart.Checked = Config.AutoStart;
+            keyNext.Value = (Config.Hotkey >= 0 && Config.Hotkey <= 9) ? Config.Hotkey : -1;
+            keyPrev.Value = (Config.HotkeyPrev >= 0 && Config.HotkeyPrev <= 9) ? Config.HotkeyPrev : -1;
+            SyncThemeSeg();
         }
 
         private int IndexOfInterval(int minutes)
@@ -604,17 +1162,19 @@ namespace WallpaperChanger
         // Read the controls into the in-memory Config (no disk write).
         private void ApplyFromUi()
         {
-            // Sources are owned by the source manager, which writes straight
-            // to Config; there is nothing to collect from the UI here.
-            Config.Style = (WallpaperStyle)Math.Max(0, cmbStyle.SelectedIndex);
-            Config.IntervalMinutes = IntervalFromIndex(cmbInterval.SelectedIndex);
-            Config.RandomOrder = chkRandom.Checked;
-            Config.AutoStart = chkAutoStart.Checked;
-            // keep the previous values while the hotkey combos are uninitialized
-            if (cmbHotkey != null && cmbHotkey.SelectedIndex >= 0)
-                Config.Hotkey = cmbHotkey.SelectedIndex - 1;
-            if (cmbHotkeyPrev != null && cmbHotkeyPrev.SelectedIndex >= 0)
-                Config.HotkeyPrev = cmbHotkeyPrev.SelectedIndex - 1;
+            // The source list is edited in place on its page; collecting it
+            // here is what makes the save button the single write point.
+            List<string> folders = new List<string>();
+            foreach (string f in srcList.Sources) folders.Add(f);
+            Config.Folders = folders;
+            Config.DisabledFolders = srcList.DisabledList();
+
+            Config.Style = (WallpaperStyle)Math.Max(0, styleGrid.SelectedIndex);
+            Config.IntervalMinutes = IntervalFromIndex(segInterval.SelectedIndex);
+            Config.RandomOrder = segOrder.SelectedIndex == 0;
+            Config.AutoStart = swAutoStart.Checked;
+            // Hotkeys are written straight to Config by the key caps on
+            // commit, so there is nothing to collect for them here.
         }
 
         // Apply controls to memory AND persist to disk (save button / exit).
@@ -637,7 +1197,7 @@ namespace WallpaperChanger
 
         private void SyncAutoStartCheckbox()
         {
-            chkAutoStart.Checked = AutoStartHelper.AutoStartExists();
+            swAutoStart.Checked = AutoStartHelper.AutoStartExists();
         }
 
         // (Re)register the system-wide hotkeys (next + previous) from config.
@@ -675,6 +1235,20 @@ namespace WallpaperChanger
                 SetStatus(delegate { return Loc.T("status.rotate.resumed"); });
                 notifyIcon.ShowBalloonTip(1200, "WallpaperChanger", Loc.T("status.rotate.resumed"), ToolTipIcon.Info);
             }
+            SyncRailState();
+        }
+
+        // The rail's status card mirrors the rotate timer: dot colour, the
+        // caption next to it, the pause button and its own countdown.
+        private void SyncRailState()
+        {
+            if (rail == null || rotateTimer == null) return;
+            bool on = rotateTimer.Enabled;
+            rail.Rotating = on;
+            rail.DotCaption = on ? Loc.T("rail.rotating") : Loc.T("rail.paused");
+            rail.PauseText = on ? Loc.T("rail.pause") : Loc.T("rail.resume");
+            rail.CountdownCaption = Loc.T("rail.next");
+            rail.Invalidate();
         }
 
         private void ShowWindow()
@@ -718,7 +1292,7 @@ namespace WallpaperChanger
                 dlg.ShowDialog(this);
             }
             bool nowOn = Config.ManualPicked.Count > 0;
-            RefreshManualPickText();
+            RefreshStatusLine();
             if (wasOn != nowOn)
             {
                 RefreshStatusLine();
@@ -1017,6 +1591,7 @@ namespace WallpaperChanger
             if (n > 0 && string.Equals(history[n - 1], path, StringComparison.OrdinalIgnoreCase)) return;
             history.Add(path);
             if (history.Count > HistoryLimit) history.RemoveRange(0, history.Count - HistoryLimit);
+            RebuildHistory();
         }
 
         // Park a wallpaper that "previous" stepped away from (newest pushed
@@ -1028,6 +1603,155 @@ namespace WallpaperChanger
             int n = forward.Count;
             if (n > 0 && string.Equals(forward[n - 1], path, StringComparison.OrdinalIgnoreCase)) return;
             forward.Add(path);
+            RebuildHistory();
+        }
+
+        // ---- history timeline ----------------------------------------------
+
+        // The design wants one list containing the whole trail, with the
+        // current entry inside it. The model behind it is still history +
+        // forward: history runs oldest -> newest and ends at the current
+        // wallpaper, and forward (reversed) continues past it. So the
+        // timeline is history ++ reverse(forward) and the current position is
+        // always history.Count - 1.
+        private List<string> Timeline()
+        {
+            List<string> t = new List<string>(history);
+            for (int i = forward.Count - 1; i >= 0; i--) t.Add(forward[i]);
+            return t;
+        }
+
+        private int histHi = -1;   // timeline index shown in the first row
+
+        private void RebuildHistory()
+        {
+            if (histList == null) return;
+            List<string> t = Timeline();
+            int cur = history.Count - 1;
+
+            if (t.Count == 0)
+            {
+                histHi = -1;
+                histList.SetRows(null, null, null, -1);
+                return;
+            }
+
+            int lo = Math.Max(0, cur - 3);
+            int hi = Math.Min(t.Count - 1, cur + 2);
+            int rows = hi - lo + 1;
+            string[] names = new string[rows];
+            string[] metas = new string[rows];
+            Image[] thumbs = new Image[rows];
+            int dispCur = -1;
+
+            for (int r = 0; r < rows; r++)
+            {
+                int ti = hi - r;                       // newest first
+                string p = t[ti];
+                names[r] = Path.GetFileName(p);
+                string tag = ti == cur ? Loc.T("hist.cur")
+                    : (ti > cur ? Loc.T("hist.undoable") : Loc.T("hist.seen"));
+                metas[r] = tag + " · " + SourceOf(p);
+                thumbs[r] = ThumbCache.Get(p, 52, 29);
+                if (ti == cur) dispCur = r;
+            }
+
+            histHi = hi;
+            histList.SetRows(names, metas, thumbs, dispCur);
+            RequestMissingThumbs(t);
+        }
+
+        // Thumbnails are generated on a background thread; when one lands the
+        // list is rebuilt once. The set of already-requested paths keeps that
+        // from becoming a rebuild loop when a file cannot be decoded.
+        private readonly HashSet<string> thumbRequested =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        private void RequestMissingThumbs(List<string> timeline)
+        {
+            List<string> missing = new List<string>();
+            foreach (string p in timeline)
+            {
+                if (thumbRequested.Contains(p)) continue;
+                if (ThumbCache.Get(p, 52, 29) != null) continue;
+                thumbRequested.Add(p);
+                missing.Add(p);
+            }
+            if (missing.Count == 0) return;
+
+            Task.Run(delegate
+            {
+                foreach (string p in missing)
+                {
+                    try { ThumbCache.Generate(p, 52, 29); }
+                    catch { }
+                }
+                SafeUi(delegate { RebuildHistory(); });
+            });
+        }
+
+        private void OnHistoryRowClicked()
+        {
+            if (histHi < 0) return;
+            int row = histList.ClickedIndex;
+            if (row < 0) return;
+            JumpToTimeline(histHi - row);
+        }
+
+        // Walk the timeline to an arbitrary entry in one step. Going back
+        // parks everything above the target on the forward stack (so "next"
+        // still redo-restores it); going forward consumes that stack.
+        private void JumpToTimeline(int target)
+        {
+            if (busy) return;
+            List<string> t = Timeline();
+            int cur = history.Count - 1;
+            if (target < 0 || target >= t.Count || target == cur) return;
+            string path = t[target];
+
+            busy = true;
+            Task.Run(delegate
+            {
+                bool ok = false;
+                try { ok = WallpaperEngine.Apply(path, Config.Style); }
+                catch { ok = false; }
+                string name = Path.GetFileName(path);
+                SafeUi(delegate
+                {
+                    try
+                    {
+                        if (ok)
+                        {
+                            if (target < cur)
+                            {
+                                // Walking back: the nearest departure has to
+                                // end up on top of the stack, so push from
+                                // the current end downwards.
+                                for (int k = cur; k > target; k--) forward.Add(t[k]);
+                                history.RemoveRange(target + 1, history.Count - (target + 1));
+                            }
+                            else
+                            {
+                                for (int k = cur + 1; k <= target; k++) history.Add(t[k]);
+                                int drop = target - cur;
+                                if (drop > 0 && forward.Count >= drop)
+                                    forward.RemoveRange(forward.Count - drop, drop);
+                            }
+                            lastApplied = path;
+                            RebuildHistory();
+                            SetStatus(delegate { return Loc.F("status.current", name, lastTotal) + ModeTag(); });
+                        }
+                        else
+                        {
+                            SetStatus(delegate { return Loc.F("status.applyfail", name); });
+                        }
+                    }
+                    finally
+                    {
+                        busy = false;
+                    }
+                });
+            });
         }
 
         // Step back to the wallpaper that was up before the current one.
@@ -1111,15 +1835,48 @@ namespace WallpaperChanger
 
         private void RenderStatus()
         {
+            if (footer == null) return;
+
             string first = statusLine != null ? (statusLine() ?? "") : "";
-            if (first.Length == 0) lblStatus.Text = NextSwitchText();
-            else lblStatus.Text = first + "\r\n" + NextSwitchText();
+            if (first.Length == 0) first = NextSwitchText();
+
+            footer.MainText = first;
+            footer.SubText = SubStatusText();
+            footer.Healthy = rotateTimer != null && rotateTimer.Enabled;
+            footer.Dirty = dirty;
+            RefreshNowCard();
+
+            // The rail carries the same countdown as its own status card, so
+            // it has to move with it.
+            if (rail != null && rotateTimer != null && rotateTimer.Enabled)
+            {
+                rail.Countdown = DateTime.Now.AddMilliseconds(rotateTimer.Interval).ToString("HH:mm");
+                rail.Rotating = true;
+            }
+            else if (rail != null)
+            {
+                rail.Rotating = false;
+            }
+        }
+
+        // The second run in the status bar: which pool is being rotated.
+        private string SubStatusText()
+        {
+            if (Config.ManualPicked.Count > 0) return Loc.F("sb.manual", Config.ManualPicked.Count);
+            return Loc.T("sb.all");
         }
 
         // Re-render both lines, so the first one follows the current language.
         private void RefreshStatusLine()
         {
             RenderStatus();
+        }
+
+        // The focused key cap swallows this: Ctrl+9 has to be bindable
+        // without also switching the wallpaper while it is being bound.
+        private bool SuppressHotkeys
+        {
+            get { return KeyCapButton.AnyCapturing; }
         }
 
         private string NextSwitchText()
@@ -1158,7 +1915,51 @@ namespace WallpaperChanger
                 }
                 return;
             }
+            // Closing for real: remember the window size the user settled on
+            // so the next launch reopens the same way.
+            CaptureWindowSize();
+            Config.Save();
             base.OnFormClosing(e);
+        }
+
+        // Persist the size in 96-DPI logical units. The raw pixels of a 150%
+        // monitor would reopen far too large on a 100% one. A maximised or
+        // minimised window is not a size the user chose, so it is ignored and
+        // the previously stored one survives.
+        private void CaptureWindowSize()
+        {
+            if (WindowState != FormWindowState.Normal) return;
+            int dpi = DeviceDpi > 0 ? DeviceDpi : 96;
+            int w = (int)Math.Round(Width * 96.0 / dpi);
+            int h = (int)Math.Round(Height * 96.0 / dpi);
+            if (w <= 0 || h <= 0) return;
+            Config.WindowWidth = w;
+            Config.WindowHeight = h;
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+            ApplySavedWindowSize();
+        }
+
+        // Runs after the handle exists, so the auto-scaled Size is already in
+        // physical pixels and DeviceDpi is known. Clamping against the work
+        // area matters because the window can be taller than the design and a
+        // config copied from a 4K machine would otherwise open off screen.
+        private void ApplySavedWindowSize()
+        {
+            if (Config.WindowWidth <= 0 || Config.WindowHeight <= 0) return;
+            double s = (DeviceDpi > 0 ? DeviceDpi : 96) / 96.0;
+            int w = Math.Max(Theme.WindowMinW, Config.WindowWidth);
+            int h = Math.Max(Theme.WindowMinH, Config.WindowHeight);
+            Size wanted = new Size((int)Math.Round(w * s), (int)Math.Round(h * s));
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            wanted.Width = Math.Max(Theme.WindowMinW, Math.Min(wanted.Width, wa.Width));
+            wanted.Height = Math.Max(Theme.WindowMinH, Math.Min(wanted.Height, wa.Height));
+            if (wanted == Size) return;
+            Size = wanted;
+            if (StartPosition == FormStartPosition.CenterScreen) CenterToScreen();
         }
 
         // The handle is (re)created on show and on DPI changes - (re)register
@@ -1170,13 +1971,66 @@ namespace WallpaperChanger
                 + " client=" + ClientSize.Width + "x" + ClientSize.Height);
             Theme.SetTitleBar(this);
             if (hotkeyManager != null) ApplyHotkey();
+            try
+            {
+                // Rounded corners for the borderless frame; older Windows
+                // simply ignores this.
+                int round = DWMWCP_ROUND;
+                DwmSetWindowAttribute(Handle, DWMWA_WINDOW_CORNER_PREFERENCE,
+                    ref round, sizeof(int));
+            }
+            catch
+            {
+            }
+            UpdateMaximizedBounds();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            if (WindowState == FormWindowState.Maximized) UpdateMaximizedBounds();
+        }
+
+        // With WM_NCCALCSIZE answering 0 the client area equals the window
+        // rect, so a maximised window has to be pinned to the work area or
+        // the frame inflation would push the content off screen.
+        private void UpdateMaximizedBounds()
+        {
+            Screen s = Screen.FromControl(this);
+            MaximizedBounds = s.WorkingArea;
+        }
+
+        private int ResizeBorder
+        {
+            get { return (int)Math.Round(6.0 * DeviceDpi / 96.0); }
+        }
+
+        // Keep the system frame style alive so DWM still provides the shadow,
+        // Aero snap and native maximise, while the client area takes the
+        // whole window (WM_NCCALCSIZE below).
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.Style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+                return cp;
+            }
         }
 
         // System-wide hotkeys arrive as WM_HOTKEY regardless of focus.
         protected override void WndProc(ref Message m)
         {
+            // The borderless frame needs these answered before anything else
+            // looks at the message.
+            HandleNcMessages(ref m);
+            if (m.Msg == WM_NCCALCSIZE || m.Msg == WM_NCHITTEST) return;
+
             base.WndProc(ref m);
             if (hotkeyManager == null) return;
+            // While a key cap is waiting for a combination, Ctrl+digit must
+            // not also fire the wallpaper switch it is being bound away from.
+            if (SuppressHotkeys) return;
             HotkeyAction action = hotkeyManager.Identify((uint)m.Msg, m.WParam);
             if (action == HotkeyAction.Next)
             {
@@ -1187,6 +2041,68 @@ namespace WallpaperChanger
             {
                 Log.Write("hotkey: prev");
                 PrevWallpaper();
+            }
+        }
+
+        // ---- borderless frame ----------------------------------------------
+
+        private const int WM_NCCALCSIZE = 0x0083;
+        private const int WM_NCHITTEST = 0x0084;
+        private const int WS_THICKFRAME = 0x00040000;
+        private const int WS_MINIMIZEBOX = 0x00020000;
+        private const int WS_MAXIMIZEBOX = 0x00010000;
+
+        private const int HTCLIENT = 1;
+        private const int HTLEFT = 10;
+        private const int HTRIGHT = 11;
+        private const int HTTOP = 12;
+        private const int HTTOPLEFT = 13;
+        private const int HTTOPRIGHT = 14;
+        private const int HTBOTTOM = 15;
+        private const int HTBOTTOMLEFT = 16;
+        private const int HTBOTTOMRIGHT = 17;
+
+        private const int DWMWA_WINDOW_CORNER_PREFERENCE = 33;
+        private const int DWMWCP_ROUND = 2;
+
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll", PreserveSig = false)]
+        private static extern void DwmSetWindowAttribute(IntPtr hwnd, uint attr,
+            ref int value, uint size);
+
+        // Answer 0 so the client area covers the entire window; then hand the
+        // outer few pixels back as resize borders, because the child controls
+        // cover the whole client area and would otherwise eat the drag.
+        private void HandleNcMessages(ref Message m)
+        {
+            if (m.Msg == WM_NCCALCSIZE && m.WParam != IntPtr.Zero)
+            {
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            if (m.Msg == WM_NCHITTEST)
+            {
+                base.WndProc(ref m);
+                if ((int)m.Result != HTCLIENT) return;
+                if (WindowState == FormWindowState.Maximized) return;
+
+                int lp = unchecked((int)(long)m.LParam);
+                Point p = PointToClient(new Point(unchecked((short)(lp & 0xFFFF)),
+                    unchecked((short)((lp >> 16) & 0xFFFF))));
+                int b = ResizeBorder;
+                bool left = p.X <= b;
+                bool right = p.X >= ClientSize.Width - b;
+                bool top = p.Y <= b;
+                bool bottom = p.Y >= ClientSize.Height - b;
+                int hit = 0;
+                if (top && left) hit = HTTOPLEFT;
+                else if (top && right) hit = HTTOPRIGHT;
+                else if (bottom && left) hit = HTBOTTOMLEFT;
+                else if (bottom && right) hit = HTBOTTOMRIGHT;
+                else if (left) hit = HTLEFT;
+                else if (right) hit = HTRIGHT;
+                else if (top) hit = HTTOP;
+                else if (bottom) hit = HTBOTTOM;
+                if (hit != 0) m.Result = (IntPtr)hit;
             }
         }
 
