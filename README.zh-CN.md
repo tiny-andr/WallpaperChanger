@@ -4,6 +4,8 @@
 
 技术栈：C# / .NET 8（WinForms），自包含单文件，无需安装 .NET 运行库。支持 Windows 8 及以上系统（推荐 Windows 10/11 x64）。
 
+![WallpaperChanger 概览页](docs/screenshot-overview.png)
+
 ## 界面
 
 整个程序只有**一个窗口**，左栏三页：

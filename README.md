@@ -6,6 +6,8 @@ A lightweight Windows desktop wallpaper rotation tool that lives in the system t
 
 Built with C# / .NET 8 (WinForms), self-contained, no runtime needed. Designed for Windows 8 and later.
 
+![WallpaperChanger overview](docs/screenshot-overview.png)
+
 ## The window
 
 One window, three pages in the left rail:
