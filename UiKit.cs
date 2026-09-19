@@ -1131,6 +1131,12 @@ namespace WallpaperChanger
         {
             private readonly KitDropdown owner;
             private int hot = -1;
+            // When the list came up. A deactivate that arrives in the first
+            // moments is the one Windows sends while the window is still being
+            // activated - honouring it closed the list before anyone could see
+            // it (the "it only opens once" class of report, and a real flicker
+            // for a person clicking the field).
+            private int openedAt;
 
             public ListForm(KitDropdown owner)
             {
@@ -1171,9 +1177,17 @@ namespace WallpaperChanger
                 Invalidate();
             }
 
+            // Stamped by the owner right after Show(), so OnDeactivate can tell
+            // the activation flicker from a deliberate click elsewhere.
+            public void MarkOpened()
+            {
+                openedAt = Environment.TickCount;
+            }
+
             protected override void OnDeactivate(EventArgs e)
             {
                 base.OnDeactivate(e);
+                if (Environment.TickCount - openedAt < 250) return;
                 CloseList();
             }
 
@@ -1407,6 +1421,7 @@ namespace WallpaperChanger
             f.SetBounds(at.X, at.Y, w, h);
             open = f;
             f.Show();
+            f.MarkOpened();
             f.Activate();
         }
 

@@ -27,7 +27,7 @@
 
 应用为自包含发布，**无需安装 .NET 运行库**。
 
-> 当前版本：**v1.0.0**
+> 当前版本：**v2.0.0**
 
 ## 使用说明
 
@@ -58,3 +58,4 @@ dotnet publish -c Release -r win-x64 --self-contained true \
 ## 开源协议
 
 MIT
+

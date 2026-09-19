@@ -91,19 +91,10 @@ namespace WallpaperChanger
                 }
                 Mark(trace, sw, "com");
 
-                // True once a monitor has actually been given the wallpaper. A
-                // position that the shell refuses (E_INVALIDARG on some
-                // configurations) must NOT send us down the fallback path: the
-                // picture is already on screen, and re-applying it through
-                // SystemParametersInfo costs hundreds of milliseconds for
-                // nothing. The style is persisted in the registry separately.
-                bool anySet = false;
-
                 if (style == WallpaperStyle.Span)
                 {
                     // empty monitor id = whole virtual desktop (span across monitors)
                     dw.SetWallpaper("", imagePath);
-                    anySet = true;
                     Mark(trace, sw, "set");
                     TrySetPosition(dw, "", ToDWP(style), trace, sw, "sp");
                 }
@@ -125,7 +116,6 @@ namespace WallpaperChanger
                             string id = Marshal.PtrToStringUni(idPtr);
                             Marshal.FreeCoTaskMem(idPtr);
                             dw.SetWallpaper(id, imagePath);
-                            anySet = true;
                             Mark(trace, sw, "set" + i);
                             TrySetPosition(dw, id, ToDWP(style), trace, sw, "pos" + i);
                         }
@@ -339,4 +329,5 @@ namespace WallpaperChanger
         }
     }
 }
+
 
