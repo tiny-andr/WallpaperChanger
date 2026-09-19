@@ -2404,19 +2404,31 @@ namespace WallpaperChanger
             get { return (int)Math.Round(6.0 * DeviceDpi / 96.0); }
         }
 
-        // Keep the system frame style alive so DWM still provides the shadow
-        // and the resize edges, while the client area takes the whole window
-        // (WM_NCCALCSIZE below). WS_MAXIMIZEBOX is cleared explicitly: the
-        // window must not maximise, and clearing the bit is what makes the
-        // window menu, snap-to-top and any WM_SYSCOMMAND path agree with the
-        // missing title-bar button. OnResize still un-maximises as a backstop.
+        // NO WS_THICKFRAME. That was the source of the border the user kept
+        // reporting: while the frame style is alive Windows draws a classic
+        // non-client border around the window - measured at 5px on the top,
+        // left and right edges, starting 2px in (outer highlight, white line,
+        // then #B4B4B4) - and DWMWA_BORDER_COLOR does not suppress it on every
+        // build. Dropping the frame style removes the non-client area
+        // altogether, so there is nothing left to draw one.
+        //
+        // The trade is the resize edges, which this window does not need: the
+        // layout is a fixed 980x668 design with a fixed-coordinate body. The
+        // window that does benefit from being resized - the wallpaper picker -
+        // is its own Sizable dialog and is unaffected.
+        //
+        // WS_MINIMIZEBOX stays: the title bar's own minimise button is wired to
+        // WindowState, and that flag keeps the taskbar/Alt+Tab behaviour of a
+        // minimisable window. WS_MAXIMIZEBOX is cleared so the window menu,
+        // snap-to-top and any WM_SYSCOMMAND path agree with the missing button;
+        // OnResize still un-maximises as a backstop.
         protected override CreateParams CreateParams
         {
             get
             {
                 CreateParams cp = base.CreateParams;
-                cp.Style |= WS_THICKFRAME | WS_MINIMIZEBOX;
-                cp.Style &= ~WS_MAXIMIZEBOX;
+                cp.Style |= WS_MINIMIZEBOX;
+                cp.Style &= ~(WS_MAXIMIZEBOX | WS_THICKFRAME);
                 return cp;
             }
         }
@@ -2455,13 +2467,12 @@ namespace WallpaperChanger
         // WM_NCACTIVATE and WM_NCPAINT are answered in HandleNcMessages below.
         private const int WM_NCCALCSIZE = 0x0083;
         private const int WM_NCHITTEST = 0x0084;
-        // Activation and non-client painting. WS_THICKFRAME is kept for DWM's
-        // shadow, and that frame brings a non-client area which Windows paints
-        // itself whenever the window becomes active or INACTIVE. With
-        // WM_NCCALCSIZE answering 0 the client covers the whole window, so the
-        // frame Windows paints on activation changes lands on top of our own
-        // pixels - the strip that appears as soon as the window loses focus
-        // ("点击一下桌面空白处就会出现白边", also after opening Help).
+        // Activation and non-client painting. The window no longer carries
+        // WS_THICKFRAME (see CreateParams), so there should be no non-client
+        // area at all; these handlers stay as belt and braces for the states
+        // where Windows still asks - activation changes are the classic case,
+        // and a frame painted there lands on top of our own pixels because
+        // WM_NCCALCSIZE answers 0.
         private const int WM_NCACTIVATE = 0x0086;
         private const int WM_NCPAINT = 0x0085;
         private const int WM_SETTEXT = 0x000C;
@@ -2516,28 +2527,11 @@ namespace WallpaperChanger
             }
             if (m.Msg == WM_NCHITTEST)
             {
+                // No resize borders any more (the window has no frame style,
+                // so Windows would not honour them anyway). Only the title
+                // bar's own drag area matters, and TitleBar answers that with
+                // WM_NCLBUTTONDOWN/HTCAPTION itself.
                 base.WndProc(ref m);
-                if ((int)m.Result != HTCLIENT) return;
-                if (WindowState == FormWindowState.Maximized) return;
-
-                int lp = unchecked((int)(long)m.LParam);
-                Point p = PointToClient(new Point(unchecked((short)(lp & 0xFFFF)),
-                    unchecked((short)((lp >> 16) & 0xFFFF))));
-                int b = ResizeBorder;
-                bool left = p.X <= b;
-                bool right = p.X >= ClientSize.Width - b;
-                bool top = p.Y <= b;
-                bool bottom = p.Y >= ClientSize.Height - b;
-                int hit = 0;
-                if (top && left) hit = HTTOPLEFT;
-                else if (top && right) hit = HTTOPRIGHT;
-                else if (bottom && left) hit = HTBOTTOMLEFT;
-                else if (bottom && right) hit = HTBOTTOMRIGHT;
-                else if (left) hit = HTLEFT;
-                else if (right) hit = HTRIGHT;
-                else if (top) hit = HTTOP;
-                else if (bottom) hit = HTBOTTOM;
-                if (hit != 0) m.Result = (IntPtr)hit;
             }
         }
 
