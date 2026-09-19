@@ -224,6 +224,7 @@ namespace WallpaperChanger
             m["win.max"] = "最大化";
             m["win.restore"] = "还原";
             m["win.close"] = "关闭";
+            m["app.name"] = "WallpaperChanger";
             m["win.help"] = "帮助";
             m["ov.now.showing"] = "正在显示";
             m["ov.next"] = "下一张壁纸";
@@ -422,6 +423,7 @@ namespace WallpaperChanger
             m["win.max"] = "Maximize";
             m["win.restore"] = "Restore";
             m["win.close"] = "Close";
+            m["app.name"] = "WallpaperChanger";
             m["win.help"] = "Help";
             m["ov.now.showing"] = "Now showing";
             m["ov.next"] = "Next wallpaper";
@@ -620,6 +622,7 @@ namespace WallpaperChanger
             m["win.max"] = "最大化";
             m["win.restore"] = "元に戻す";
             m["win.close"] = "閉じる";
+            m["app.name"] = "WallpaperChanger";
             m["win.help"] = "ヘルプ";
             m["ov.now.showing"] = "表示中";
             m["ov.next"] = "次の壁紙";

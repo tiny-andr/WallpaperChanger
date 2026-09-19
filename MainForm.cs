@@ -27,6 +27,10 @@ namespace WallpaperChanger
         private KitLabel lblStripInterval;
         private KitLabel lblStripOrder;
         private FlatButton btnAdjust;
+        // The strip's ".k" captions and the card that owns the row, so the
+        // flexible-spacer layout can place the pairs from their text widths.
+        private CardPanel stripRow;
+        private readonly List<KitLabel> stripKeys = new List<KitLabel>();
         private HistoryList histList;
         private readonly KitLabel[] factVal = new KitLabel[3];
         private readonly KitLabel[] factLab = new KitLabel[3];
@@ -102,6 +106,13 @@ namespace WallpaperChanger
         private readonly List<string> forward = new List<string>();
         private int lastTotal;   // image count of the most recent scan, for the redo status line
 
+        // The last Normal-state rectangle, kept so a maximised window can be
+        // checked against the monitor the window actually came from. Screen
+        // .FromControl would happily confirm the wrong monitor, because by then
+        // the window is sitting on it.
+        private Rectangle normalBounds;
+        private FormWindowState lastState = FormWindowState.Normal;
+
         // Set when the process was launched by the Startup shortcut: the
         // window stays in the tray so booting the machine does not drop a
         // dialog in the middle of the screen.
@@ -138,9 +149,10 @@ namespace WallpaperChanger
             // is what makes WindowW mean the pixels on screen.
             Size = new Size(Theme.WindowW, Theme.WindowH);
             MinimumSize = new Size(Theme.WindowMinW, Theme.WindowMinH);
-            // An invisible band the form keeps for its own hit testing, so
-            // edge resizing still works with child controls covering everything.
-            Padding = new Padding(6);
+            // No Padding: the shell has to start at (0,0) like the design's, or
+            // the whole window sits 6px in from its own edge. Edge resizing does
+            // not need a reserved band either - WM_NCHITTEST hands the outer
+            // few pixels back as resize borders on its own.
             Font = new Font("Microsoft YaHei UI", 9F);
             BackColor = Theme.FormBack;
 
@@ -148,6 +160,9 @@ namespace WallpaperChanger
             // control creation (ApplyTexts also touches combo selections).
             loadingUi = true;
             hotkeyManager = new HotkeyManager(this);
+            // The owner-drawn controls ask InputMode before painting a focus
+            // ring, so it has to start watching before the window takes input.
+            InputMode.Install();
             BuildUi();
             BuildTray();
 
@@ -316,7 +331,7 @@ namespace WallpaperChanger
             PageStack page = NewPage(null, null);
 
             // "正在显示": preview on the left, facts and actions on the right.
-            CardPanel hero = page.AddCard(246);
+            CardPanel hero = page.AddCard(238);
             nowPreview = hero.AddChild(new PreviewBox(), 0, 0, 374, 210);
             nowPreview.EmptyText = Loc.T("ov.preview.none");
 
@@ -349,22 +364,28 @@ namespace WallpaperChanger
 
             // Summary strip: the three settings that decide what gets shown,
             // as a read-only echo of the rotate page.
-            CardPanel strip = page.AddCard(66);
-            lblStripStyle = StripPair(strip, 4, "ov.strip.style");
-            lblStripInterval = StripPair(strip, 192, "ov.strip.interval");
-            lblStripOrder = StripPair(strip, 380, "ov.strip.order");
-            btnAdjust = strip.AddChild(new FlatButton(), 590, 17, 94, Theme.BtnSmallH);
+            //
+            // ".strip" in the prototype is a flex row - three key/value pairs
+            // separated by equal flexible spacers with the adjust button pinned
+            // to the right end. Fixed x positions cannot express that: they were
+            // laid out against a 684px body and ran straight past the card edge
+            // as soon as the window was a different width.
+            stripRow = page.AddCard(65);
+            stripRow.Pad = 13;
+            stripRow.PadX = 16;
+            lblStripStyle = StripPair(stripRow, "ov.strip.style");
+            lblStripInterval = StripPair(stripRow, "ov.strip.interval");
+            lblStripOrder = StripPair(stripRow, "ov.strip.order");
+            btnAdjust = stripRow.AddChild(new FlatButton(), 0, 1, 94, Theme.BtnSmallH);
             btnAdjust.Kind = BtnKind.Ghost;
             btnAdjust.Compact = true;
             btnAdjust.Click += delegate { ShowPage(2); };
+            stripRow.LaidOut += delegate { LayoutStrip(); };
 
             // Switch history. The rows come from the history + forward model,
             // not from a log of this run.
-            CardPanel hist = page.AddCard(384);
-            hist.Title = Loc.T("hist.title");
-            hist.Note = Loc.T("hist.note");
-
-            histList = hist.AddChild(new HistoryList(), 0, 0, 684, 300);
+            CardPanel hist = page.AddCard(148);
+            histList = hist.AddChild(new HistoryList(), 0, 0, 684, 111);
             histList.RowH = 47;
             histList.CurrentTag = Loc.T("hist.cur");
             histList.UndoableTag = Loc.T("hist.undoable");
@@ -373,12 +394,58 @@ namespace WallpaperChanger
             histList.ItemClicked += delegate { OnHistoryRowClicked(); };
         }
 
-        private KitLabel StripPair(CardPanel card, int x, string key)
+        // ".k" and ".v" are stacked directly: the design puts the caption on
+        // the first line of the body and the value right underneath it, with no
+        // extra gap between the two lines.
+        private KitLabel StripPair(CardPanel card, string key)
         {
-            KitLabel k = card.AddChild(Txt(LabelStyle.Cap, true), x, 6, 180, 16);
+            KitLabel k = card.AddChild(Txt(LabelStyle.Cap, true), 0, 1, 180, 17);
             k.Text = Loc.T(key);
-            KitLabel v = card.AddChild(Txt(LabelStyle.BodyBold), x, 22, 180, 20);
+            stripKeys.Add(k);
+            KitLabel v = card.AddChild(Txt(LabelStyle.BodyBold), 0, 18, 180, 20);
             return v;
+        }
+
+        // Equal flexible spacers between the four items, exactly like the
+        // prototype's three "flex:1" spans.
+        private void LayoutStrip()
+        {
+            if (stripRow == null || btnAdjust == null || stripKeys.Count < 3) return;
+            KitLabel[] vals = { lblStripStyle, lblStripInterval, lblStripOrder };
+            Rectangle b = stripRow.Body;
+            if (b.Width <= 0) return;
+
+            int[] pairW = new int[3];
+            int total = 0;
+            for (int i = 0; i < 3; i++)
+            {
+                int kw = TextW(stripKeys[i].Text, Theme.FsCap, FontStyle.Regular);
+                int vw = TextW(vals[i].Text, Theme.FsBodySm, FontStyle.Bold);
+                pairW[i] = Math.Max(kw, vw);
+                total += pairW[i];
+            }
+            // ".btn-sm{padding:0 11px}" around the label.
+            int btnW = TextW(btnAdjust.Text, Theme.FsSub, FontStyle.Regular)
+                + Gfx.S(this, 22);
+            total += btnW;
+
+            int slack = Math.Max(0, b.Width - total);
+            int gap = slack / 3;
+
+            int x = b.Left;
+            for (int i = 0; i < 3; i++)
+            {
+                stripKeys[i].SetBounds(x, stripKeys[i].Top, pairW[i], stripKeys[i].Height);
+                vals[i].SetBounds(x, vals[i].Top, pairW[i], vals[i].Height);
+                x += pairW[i] + gap;
+            }
+            btnAdjust.SetBounds(b.Right - btnW, btnAdjust.Top, btnW, btnAdjust.Height);
+        }
+
+        private int TextW(string text, float px, FontStyle style)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            return TextRenderer.MeasureText(text, Theme.UiFont(px, style, DeviceDpi)).Width;
         }
 
         // ---- sources -------------------------------------------------------
@@ -612,6 +679,7 @@ namespace WallpaperChanger
             rail.DotCaption = rotateTimer != null && rotateTimer.Enabled
                 ? Loc.T("rail.rotating") : Loc.T("rail.paused");
             rail.CountdownCaption = Loc.T("rail.next");
+            bar.TitleText = Loc.T("app.name");
             bar.VersionText = "v" + Application.ProductVersion;
             bar.HelpText = Loc.T("win.help");
             footer.DirtyText = Loc.T("sb.dirty");
@@ -1941,6 +2009,7 @@ namespace WallpaperChanger
         {
             base.OnLoad(e);
             ApplySavedWindowSize();
+            if (bar != null) bar.SyncWindowState(WindowState);
         }
 
         // Runs after the handle exists, so the auto-scaled Size is already in
@@ -1988,7 +2057,43 @@ namespace WallpaperChanger
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
-            if (WindowState == FormWindowState.Maximized) UpdateMaximizedBounds();
+            // The middle caption button shows a restore glyph once the window is
+            // maximised, which is what every Windows title bar does.
+            if (bar != null) bar.SyncWindowState(WindowState);
+
+            if (WindowState == FormWindowState.Normal)
+            {
+                normalBounds = Bounds;
+                // A borderless window owns its own maximised rectangle, so it
+                // has to be re-derived from the monitor the window is actually
+                // on. Left stale, pressing maximise throws the window back onto
+                // the monitor it used to be on, which looks exactly like the
+                // window disappearing.
+                UpdateMaximizedBounds();
+            }
+            else if (WindowState == FormWindowState.Maximized)
+            {
+                KeepMaximizedOnScreen();
+                // The client area just changed size behind WinForms' back
+                // (WM_NCCALCSIZE answers 0), so ask for a full repaint instead
+                // of trusting whatever happens to be on the surface.
+                Invalidate(true);
+            }
+
+            if (lastState != WindowState)
+            {
+                lastState = WindowState;
+                Log.Write("window: state=" + WindowState + " bounds=" + Bounds
+                    + " dpi=" + DeviceDpi);
+            }
+        }
+
+        protected override void OnLocationChanged(EventArgs e)
+        {
+            base.OnLocationChanged(e);
+            if (WindowState != FormWindowState.Normal) return;
+            normalBounds = Bounds;
+            UpdateMaximizedBounds();
         }
 
         // With WM_NCCALCSIZE answering 0 the client area equals the window
@@ -1999,6 +2104,43 @@ namespace WallpaperChanger
             Screen s = Screen.FromControl(this);
             MaximizedBounds = s.WorkingArea;
         }
+
+        // Last line of defence for "pressing maximise made the window go away".
+        // If the maximised rectangle did not land on the monitor the window came
+        // from, put it there: a maximised window parked off screen is
+        // indistinguishable from a crash to the person using it.
+        private void KeepMaximizedOnScreen()
+        {
+            Rectangle anchor = normalBounds.Width > 0 ? normalBounds : RestoreBounds;
+            if (anchor.Width <= 0 || anchor.Height <= 0) return;
+            Rectangle want = Screen.FromRectangle(anchor).WorkingArea;
+
+            RECT r;
+            if (!GetWindowRect(Handle, out r)) return;
+            Rectangle got = Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+            if (got == want) return;
+
+            Log.Write("window: maximised to " + got + ", wanted " + want + " - correcting");
+            MaximizedBounds = want;
+            SetWindowPos(Handle, IntPtr.Zero, want.Left, want.Top, want.Width, want.Height,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_NOCOPYBITS);
+        }
+
+        [System.Runtime.InteropServices.StructLayout(
+            System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        private const int SWP_NOZORDER = 0x0004;
+        private const int SWP_NOACTIVATE = 0x0010;
+        private const int SWP_NOCOPYBITS = 0x0100;
+        private const int SWP_FRAMECHANGED = 0x0020;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hwnd, out RECT r);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after,
+            int x, int y, int cx, int cy, int flags);
 
         private int ResizeBorder
         {

@@ -111,7 +111,8 @@ namespace WallpaperChanger
             return f | TextFormatFlags.EndEllipsis;
         }
 
-        // Honest focus ring: a rounded outline just outside the control.
+        // Honest focus ring: a rounded outline just outside the control. Only
+        // asked for when the keyboard is what moved the focus - see InputMode.
         public static void FocusRing(Graphics g, RectangleF r, float rad, Control c)
         {
             using (Pen p = new Pen(Theme.FocusRing, 2f))
@@ -122,6 +123,63 @@ namespace WallpaperChanger
                 {
                     g.DrawPath(p, path);
                 }
+            }
+        }
+    }
+
+    // The prototype styles :focus-visible, which is the keyboard-only case: a
+    // ring around the button the mouse just clicked reads as a defect, and it
+    // showed up on every clickable control in the window. WinForms has no such
+    // notion, so the last input device is tracked at thread level and the
+    // owner-drawn controls ask before painting their ring.
+    internal static class InputMode
+    {
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+        private const int WM_LBUTTONDOWN = 0x0201;
+        private const int WM_LBUTTONDBLCLK = 0x0203;
+        private const int WM_RBUTTONDOWN = 0x0204;
+        private const int WM_MBUTTONDOWN = 0x0207;
+        private const int WM_XBUTTONDOWN = 0x020B;
+
+        private static bool keyboard;
+        private static bool installed;
+
+        // A freshly opened window shows no ring until a key is pressed, which
+        // is also what the OS does for its own controls.
+        public static bool Keyboard { get { return keyboard; } }
+
+        public static void Note(int msg)
+        {
+            switch (msg)
+            {
+                case WM_KEYDOWN:
+                case WM_SYSKEYDOWN:
+                    keyboard = true;
+                    break;
+                case WM_LBUTTONDOWN:
+                case WM_LBUTTONDBLCLK:
+                case WM_RBUTTONDOWN:
+                case WM_MBUTTONDOWN:
+                case WM_XBUTTONDOWN:
+                    keyboard = false;
+                    break;
+            }
+        }
+
+        public static void Install()
+        {
+            if (installed) return;
+            installed = true;
+            Application.AddMessageFilter(new Filter());
+        }
+
+        private sealed class Filter : IMessageFilter
+        {
+            public bool PreFilterMessage(ref Message m)
+            {
+                Note(m.Msg);
+                return false;
             }
         }
     }
@@ -302,9 +360,22 @@ namespace WallpaperChanger
         public string Note { get { return note; } set { note = value ?? ""; Invalidate(); } }
         public int Pad { get { return pad; } set { pad = value; Invalidate(); } }
 
+        // .card pads 18px all round, but the overview strip is its own rule:
+        // ".strip{ padding:13px 16px }" - 5px less vertically, 2px less
+        // horizontally. One number for both would put the strip's text on a
+        // different baseline from the card it sits in.
+        public int PadX
+        {
+            get { return padX >= 0 ? padX : pad; }
+            set { padX = value; Invalidate(); }
+        }
+
+        private int padX = -1;
+
         public bool HasHeader { get { return title.Length > 0; } }
 
         public int PadPx { get { return Gfx.S(this, pad); } }
+        public int PadXPx { get { return Gfx.S(this, PadX); } }
 
         // Header height in device pixels (0 when the card has no header).
         public int HeaderPx
@@ -326,7 +397,7 @@ namespace WallpaperChanger
         {
             get
             {
-                int availW = Width - PadPx * 2;
+                int availW = Width - PadXPx * 2;
                 if (note.Length == 0 || availW <= 0) return 0;
                 int lineH = Gfx.S(this, 18);
                 Font f = Theme.UiFont(Theme.FsCardNote, FontStyle.Regular, DeviceDpi);
@@ -344,8 +415,9 @@ namespace WallpaperChanger
             get
             {
                 int p = PadPx;
+                int px = PadXPx;
                 int top = p + HeaderPx;
-                return new Rectangle(p, top, Math.Max(0, Width - p * 2),
+                return new Rectangle(px, top, Math.Max(0, Width - px * 2),
                     Math.Max(0, Height - top - p));
             }
         }
@@ -491,7 +563,15 @@ namespace WallpaperChanger
                     Math.Max(0, (Gfx.S(this, 22) + Gfx.S(this, 8) - h) / 2 + p / 2),
                     w, h);
             }
+
+            // Placements give every child a fixed box. A few rows in the design
+            // are not fixed: ".strip" separates its items with equal flexible
+            // spacers, so their positions depend on the card's current width.
+            // Those owners lay their children out from here.
+            if (LaidOut != null) LaidOut(this, EventArgs.Empty);
         }
+
+        public event EventHandler LaidOut;
 
         // Height this card needs for nothing to be cut off. It is the design
         // height in the normal case, and grows when a wrapped segmented
@@ -571,7 +651,7 @@ namespace WallpaperChanger
             if (HasHeader)
             {
                 int y = p;
-                Gfx.Text(g, title, Theme.UiFont(Theme.FsCardTitle, FontStyle.Bold, DeviceDpi),
+                Gfx.Text(g, title, Theme.UiFont(Theme.FsCardTitle, Theme.WeightSemiBold, DeviceDpi),
                     Theme.Fore,
                     new Rectangle(p, y, Width - p * 2, Gfx.S(this, 22)),
                     Gfx.Ellipsis(Gfx.LeftMid));
@@ -728,7 +808,7 @@ namespace WallpaperChanger
                 RectangleF ib = new RectangleF(x, (Height - Gfx.S(this, 16)) / 2f,
                     Gfx.S(this, 16), Gfx.S(this, 16));
                 IconPainter.Draw(g, icon.Value, ib, fore, Gfx.Scale(this) * 1.6f);
-                if (Focused && Enabled) Gfx.FocusRing(g, r, rad, this);
+                if (InputMode.Keyboard && Focused && Enabled) Gfx.FocusRing(g, r, rad, this);
                 return;
             }
             if (icon.HasValue)
@@ -743,7 +823,7 @@ namespace WallpaperChanger
                 new Rectangle(x, 0, alignLeft ? textW : Math.Max(0, Width - x), Height),
                 alignLeft ? Gfx.Ellipsis(Gfx.LeftMid) : Gfx.LeftMid);
 
-            if (Focused && Enabled) Gfx.FocusRing(g, r, rad, this);
+            if (InputMode.Keyboard && Focused && Enabled) Gfx.FocusRing(g, r, rad, this);
         }
     }
 
@@ -946,7 +1026,7 @@ namespace WallpaperChanger
             Gfx.StrokeRound(g, r, rad, Theme.Border, 1f);
 
             Font f = Theme.UiFont(this, Theme.FsSub);
-            Font fBold = Theme.UiFont(Theme.FsSub, FontStyle.Bold, DeviceDpi);
+            Font fBold = Theme.UiFont(Theme.FsSub, Theme.WeightSemiBold, DeviceDpi);
             float itemRad = Gfx.S(this, Theme.RadSegItem);
 
             for (int i = 0; i < itemRects.Count && i < items.Length; i++)
@@ -970,7 +1050,7 @@ namespace WallpaperChanger
                     rc, Gfx.Ellipsis(Gfx.CenterMid));
             }
 
-            if (Focused && Enabled) Gfx.FocusRing(g, r, rad, this);
+            if (InputMode.Keyboard && Focused && Enabled) Gfx.FocusRing(g, r, rad, this);
         }
     }
 
@@ -1001,7 +1081,7 @@ namespace WallpaperChanger
             {
                 g.FillEllipse(b, kx, ky, knob, knob);
             }
-            if (focused && enabled) Gfx.FocusRing(g, box, box.Height / 2f, c);
+            if (InputMode.Keyboard && focused && enabled) Gfx.FocusRing(g, box, box.Height / 2f, c);
         }
     }
 
@@ -1078,6 +1158,17 @@ namespace WallpaperChanger
 
     internal class NavRail : Control, IThemed
     {
+        // Vertical offsets inside .rail-status, taken from the prototype's own
+        // 136.5px card: 2x12 padding + 2x1 border around a stack of
+        // 18.75 (caption) + 6 + 28.5 (countdown) + 17.25 (its caption)
+        // + 10 + 30 (button). Keeping them named is what stops a later edit
+        // from quietly tightening the line spacing again.
+        public const int CardH = 136;
+        public const int CaptionY = 12;
+        public const int TimeY = 37;
+        public const int CapY = 66;
+        public const int ButtonY = 93;
+
         private string[] items = new string[0];
         private IconKind[] icons = new IconKind[0];
         private int selected;
@@ -1176,14 +1267,18 @@ namespace WallpaperChanger
                     Math.Max(0, Width - Gfx.S(this, 24)), itemH));
             }
 
-            int cardH = Gfx.S(this, 118);
+            // See the CardH*/Y constants above: the card used to be 118 tall,
+            // which pulled its three lines together - the "line spacing is
+            // wrong" a side-by-side reading against the prototype shows.
+            int cardH = Gfx.S(this, CardH);
             cardRect = new Rectangle(Gfx.S(this, 12), Math.Max(0, Height - Gfx.S(this, 12) - cardH),
                 Math.Max(0, Width - Gfx.S(this, 24)), cardH);
 
             int bx = cardRect.X + Gfx.S(this, 12);
             int bw = Math.Max(0, cardRect.Width - Gfx.S(this, 24));
-            pauseBtn.SetBounds(bx, cardRect.Bottom - Gfx.S(this, 12) - Gfx.S(this, Theme.BtnSmallH),
-                bw, Gfx.S(this, Theme.BtnSmallH));
+            // 93 from the card top: the countdown caption ends at 83 and the
+            // button carries a 10px gap above it.
+            pauseBtn.SetBounds(bx, cardRect.Y + Gfx.S(this, ButtonY), bw, Gfx.S(this, Theme.BtnSmallH));
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -1223,19 +1318,19 @@ namespace WallpaperChanger
             g.Clear(Theme.FormBack);
 
             Font f = Theme.UiFont(this, Theme.FsBody);
-            Font fBold = Theme.UiFont(Theme.FsBody, FontStyle.Bold, DeviceDpi);
+            Font fBold = Theme.UiFont(Theme.FsBody, Theme.WeightSemiBold, DeviceDpi);
             float rad = Gfx.S(this, Theme.RadRailItem);
 
             for (int i = 0; i < itemRects.Count; i++)
             {
                 Rectangle rc = itemRects[i];
                 bool sel = i == selected;
+                // .rail-item.on is a --selected plane and a 600 label, nothing
+                // else. The accent bar that used to be drawn down its left edge
+                // was an invention - the prototype has no such element.
                 if (sel)
                 {
                     Gfx.FillRound(g, rc, rad, Theme.Selected);
-                    RectangleF bar = new RectangleF(rc.X - Gfx.S(this, 12), rc.Y + Gfx.S(this, 10),
-                        Gfx.S(this, 3), rc.Height - Gfx.S(this, 20));
-                    Gfx.FillRound(g, bar, Gfx.S(this, 1.5f), Theme.AccentText);
                 }
                 else if (i == hotIndex)
                 {
@@ -1258,29 +1353,43 @@ namespace WallpaperChanger
                     Gfx.Ellipsis(Gfx.LeftMid));
             }
 
+            // .rail-sep: a 1px --border rule 10px under the last item, inset
+            // 10px on both sides. It was missing altogether.
+            int sepY = Gfx.S(this, 12) + items.Length * (Gfx.S(this, Theme.RailItemH) + Gfx.S(this, 2))
+                + Gfx.S(this, 10);
+            if (items.Length > 0 && sepY < cardRect.Y - Gfx.S(this, 8))
+            {
+                Gfx.Line(g, Gfx.S(this, 22), sepY, Width - Gfx.S(this, 22), sepY, Theme.Border, 1f);
+            }
+
             // status card: .rail-status sits on --surface at radius 10
             Gfx.FillRound(g, cardRect, Gfx.S(this, Theme.RadRailCard), Theme.Surface);
             Gfx.StrokeRound(g, cardRect, Gfx.S(this, Theme.RadRailCard), Theme.Border, 1f);
 
             int px = cardRect.X + Gfx.S(this, 12);
-            int py = cardRect.Y + Gfx.S(this, 12);
+            int textW = Math.Max(0, cardRect.Width - Gfx.S(this, 24));
 
+            // .rs-top sits 12px in / 12px down, on an 18.75px line box, next to
+            // the status dot.
             int dot = Gfx.S(this, 7);
             using (SolidBrush b = new SolidBrush(rotating ? Theme.Ok : Theme.ForeMuted))
             {
-                g.FillEllipse(b, px, py + Gfx.S(this, 6), dot, dot);
+                g.FillEllipse(b, px, cardRect.Y + Gfx.S(this, CaptionY) + Gfx.S(this, 6), dot, dot);
             }
             Gfx.Text(g, DotCaption, Theme.UiFont(this, Theme.FsSub), Theme.Fore,
-                new Rectangle(px + dot + Gfx.S(this, 7), py, cardRect.Width - dot - Gfx.S(this, 31),
-                    Gfx.S(this, 18)), Gfx.Ellipsis(Gfx.LeftMid));
+                new Rectangle(px + dot + Gfx.S(this, 7), cardRect.Y + Gfx.S(this, CaptionY),
+                    Math.Max(0, textW - dot - Gfx.S(this, 7)), Gfx.S(this, 19)),
+                Gfx.Ellipsis(Gfx.LeftMid));
 
-            py += Gfx.S(this, 22);
+            // .rs-time: a 19px mono run on a 28.5px line box, 6px under the
+            // caption above it.
             Gfx.Text(g, Countdown, Theme.MonoFont(this, Theme.FsRailCount), Theme.Fore,
-                new Rectangle(px, py, cardRect.Width - Gfx.S(this, 24), Gfx.S(this, 28)), Gfx.LeftMid);
+                new Rectangle(px, cardRect.Y + Gfx.S(this, TimeY), textW, Gfx.S(this, 29)),
+                Gfx.LeftMid);
 
-            py += Gfx.S(this, 27);
+            // .rs-cap: 11.5px, directly under the countdown with no extra gap.
             Gfx.Text(g, CountdownCaption, Theme.UiFont(this, Theme.FsCap), Theme.ForeMuted,
-                new Rectangle(px, py, cardRect.Width - Gfx.S(this, 24), Gfx.S(this, 17)),
+                new Rectangle(px, cardRect.Y + Gfx.S(this, CapY), textW, Gfx.S(this, 17)),
                 Gfx.Ellipsis(Gfx.LeftMid));
 
             // separator on the right edge
@@ -1456,13 +1565,22 @@ namespace WallpaperChanger
 
     internal sealed class WindowBtn : Control, IThemed
     {
-        public IconKind Kind;
+        // A property rather than a field: Control is marshal-by-reference, so
+        // touching a field from outside the class is what CS1690 warns about.
+        public IconKind Kind
+        {
+            get { return kind; }
+            set { kind = value; Invalidate(); }
+        }
+
         public bool IsClose;
+
+        private IconKind kind;
         private bool hover;
 
         public WindowBtn(IconKind kind, bool isClose)
         {
-            Kind = kind;
+            this.kind = kind;
             IsClose = isClose;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
@@ -1502,7 +1620,6 @@ namespace WallpaperChanger
     internal sealed class TitleBar : Control, IThemed
     {
         private const int WM_NCLBUTTONDOWN = 0x00A1;
-        private const int WM_NCRBUTTONUP = 0x00A5;
         private const int HTCAPTION = 2;
 
         [DllImport("user32.dll")]
@@ -1619,26 +1736,31 @@ namespace WallpaperChanger
                 (Height - Gfx.S(this, Theme.BtnSmallH)) / 2, tw, Gfx.S(this, Theme.BtnSmallH));
         }
 
-        protected override void WndProc(ref Message m)
-        {
-            if (m.Msg == WM_NCLBUTTONDOWN || m.Msg == WM_NCRBUTTONUP)
-            {
-                // Let the system run its caption loop.
-                ReleaseCapture();
-                SendMessage(Handle, m.Msg, (IntPtr)HTCAPTION, IntPtr.Zero);
-                return;
-            }
-            base.WndProc(ref m);
-        }
-
+        // Dragging is handed to the system's caption loop, which is what buys
+        // Aero snap, the window menu and the double-click gesture.
+        //
+        // The message has to go to the TOP-LEVEL window. Posting it back to
+        // this child control lands in this control's own WndProc, which posted
+        // it in the first place: each hop sends another copy, the stack fills
+        // up, and StackOverflowException kills the process before anything can
+        // catch or log it. That is the whole "the window closes when I try to
+        // drag it" defect.
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
-            if (e.Button == MouseButtons.Left)
+            if (e.Button != MouseButtons.Left) return;
+            Form frame = FindForm();
+            if (frame == null) return;
+            // Second click of a double click: the caption loop would otherwise
+            // drag again instead of toggling, so the native
+            // double-click-to-maximise gesture has to be handled here.
+            if (e.Clicks > 1)
             {
-                ReleaseCapture();
-                SendMessage(Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+                ToggleMaximize();
+                return;
             }
+            ReleaseCapture();
+            SendMessage(frame.Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -1662,7 +1784,7 @@ namespace WallpaperChanger
             }
             x += iconSize + Gfx.S(this, 10);
 
-            Font ft = Theme.UiFont(Theme.FsCardTitle, FontStyle.Bold, DeviceDpi);
+            Font ft = Theme.UiFont(Theme.FsCardTitle, Theme.WeightSemiBold, DeviceDpi);
             Size ts = TextRenderer.MeasureText(title, ft);
             Gfx.Text(g, title, ft, Theme.Fore,
                 new Rectangle(x, 0, Math.Max(0, ts.Width + 4), Height), Gfx.LeftMid);
@@ -1849,7 +1971,7 @@ namespace WallpaperChanger
             g.Clear(Parent != null ? Parent.BackColor : Theme.FormBack);
 
             int y = Gfx.S(this, 2);
-            Font ft = Theme.UiFont(Theme.FsPageTitle, FontStyle.Bold, DeviceDpi);
+            Font ft = Theme.UiFont(Theme.FsPageTitle, Theme.WeightSemiBold, DeviceDpi);
             Size ts = TextRenderer.MeasureText(title, ft);
             Gfx.Text(g, title, ft, Theme.Fore,
                 new Rectangle(0, y, Math.Max(0, Width), ts.Height + Gfx.S(this, 6)), Gfx.LeftTop);
@@ -2263,7 +2385,7 @@ namespace WallpaperChanger
             }
 
             Font fn = Theme.UiFont(this, Theme.FsBodySm);
-            Font fnBold = Theme.UiFont(Theme.FsBodySm, FontStyle.Bold, DeviceDpi);
+            Font fnBold = Theme.UiFont(Theme.FsBodySm, Theme.WeightSemiBold, DeviceDpi);
             Font fm = Theme.MonoFont(this, Theme.FsMono);
             Font ff = Theme.UiFont(this, Theme.FsCap);
             float rad = Gfx.S(this, 8);
@@ -2438,7 +2560,7 @@ namespace WallpaperChanger
 
             if (pill.Length > 0 && Width > Gfx.S(this, 40))
             {
-                Font fp = Theme.UiFont(Theme.FsCap, FontStyle.Bold, DeviceDpi);
+                Font fp = Theme.UiFont(Theme.FsCap, Theme.WeightSemiBold, DeviceDpi);
                 int dot = Gfx.S(this, 6);
                 int padX = Gfx.S(this, 9);
                 int w = TextRenderer.MeasureText(pill, fp).Width + dot + padX * 2 + Gfx.S(this, 6);
@@ -2626,7 +2748,7 @@ namespace WallpaperChanger
             Gfx.Text(g, label, f, fore,
                 new Rectangle(0, 0, Width, Height), Gfx.Ellipsis(Gfx.CenterMid));
 
-            if (Focused && !capturing) Gfx.FocusRing(g, r, rad, this);
+            if (InputMode.Keyboard && Focused && !capturing) Gfx.FocusRing(g, r, rad, this);
         }
     }
 
@@ -2716,15 +2838,15 @@ namespace WallpaperChanger
             switch (style)
             {
                 case LabelStyle.PageTitle:
-                    return Theme.UiFont(Theme.FsPageTitle, FontStyle.Bold, DeviceDpi);
+                    return Theme.UiFont(Theme.FsPageTitle, Theme.WeightSemiBold, DeviceDpi);
                 case LabelStyle.PreviewName:
-                    return Theme.UiFont(Theme.FsPreviewName, FontStyle.Bold, DeviceDpi);
+                    return Theme.UiFont(Theme.FsPreviewName, Theme.WeightSemiBold, DeviceDpi);
                 case LabelStyle.CardTitle:
-                    return Theme.UiFont(Theme.FsCardTitle, FontStyle.Bold, DeviceDpi);
+                    return Theme.UiFont(Theme.FsCardTitle, Theme.WeightSemiBold, DeviceDpi);
                 case LabelStyle.CardNote:
                     return Theme.UiFont(this, Theme.FsCardNote);
                 case LabelStyle.BodyBold:
-                    return Theme.UiFont(Theme.FsBodySm, FontStyle.Bold, DeviceDpi);
+                    return Theme.UiFont(Theme.FsBodySm, Theme.WeightSemiBold, DeviceDpi);
                 case LabelStyle.Sub:
                     return Theme.UiFont(this, Theme.FsSub);
                 case LabelStyle.Cap:
@@ -3076,7 +3198,7 @@ namespace WallpaperChanger
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.Clear(Parent != null ? Parent.BackColor : Theme.Surface);
 
-            Font fName = Theme.UiFont(Theme.FsBodySm, FontStyle.Bold, DeviceDpi);
+            Font fName = Theme.UiFont(Theme.FsBodySm, Theme.WeightSemiBold, DeviceDpi);
             Font fPath = Theme.MonoFont(this, Theme.FsMonoSm);
             Font fCap = Theme.UiFont(this, Theme.FsCap);
 

@@ -40,19 +40,27 @@ namespace WallpaperChanger
 
         // ---- geometry (logical px at 96 DPI, scale by DpiScale) ----------
 
-        // The design places every child on a fixed 684px body inside a card,
-        // so the window width is derived from that number rather than picked:
-        //   684 + 2*CardPad(36) + 2*PadX(48) = 768      card + page margins
-        //   768 + RailW(212) + 2*6(preview inset) = 992
-        //   992 + 17(vertical scrollbar)          = 1009
-        // 1016 leaves a few px of DPI-rounding slack on top of that. The old
-        // 980 was 29px short of its own content, which squeezed the third
-        // fact column and the "adjust" button down to zero width at the
-        // minimum size. The layout is fixed-width, so the minimum is the
-        // width the design actually needs.
-        public const int WindowW = 1016;
+        // 980x668 is what the prototype declares (.win), and every child in it
+        // is placed on fixed coordinates measured against that window, so the
+        // window has to be that size or the whole layout slides.
+        //
+        // This used to be 1016, derived from "the design body needs 684". That
+        // number was measured while the form still carried Padding = 6, which
+        // quietly ate 12px of the client; the "missing" width was the padding,
+        // not the design. measure.py reads the real prototype in a browser:
+        //   window 980 = rail 212 + card 718 + 2x24 page margin
+        //   card 718   = 2x18 padding + 2x1 border + 680 content
+        // so 680 is the width the body actually has to fit inside.
+        public const int WindowW = 980;
         public const int WindowH = 668;
-        public const int WindowMinW = 1016;
+        // The prototype's own minimum. The layout is fixed-coordinate, so this
+        // is the narrowest window the probe could prove nothing collapses in -
+        // narrower than this and the third fact column and the "adjust" button
+        // get squeezed to nothing.
+        // The prototype does not narrow below its own width; fixed-coordinate
+        // content (the overview's right-hand column starts at body x=370) is
+        // laid out against a 680px body and would be clipped narrower than that.
+        public const int WindowMinW = 980;
         public const int WindowMinH = 620;
 
         public const int TitleBarH = 46;
@@ -89,6 +97,10 @@ namespace WallpaperChanger
         public const int RailItemH = 44;
         public const int SegItemH = 28;
         public const int KbdH = 34;
+
+        public const int WeightRegular = 400;
+        public const int WeightSemiBold = 600;
+        public const int WeightBold = 700;
         public const int KbdMinW = 104;
         public const int BadgeSize = 19;
         public const int HelpTocItemH = 36;
@@ -391,18 +403,30 @@ namespace WallpaperChanger
         // DeviceDpi) so the result is correct on 125% / 150% monitors.
         public static Font UiFont(Control c, float pt)
         {
-            return UiFont(pt, FontStyle.Regular, c == null ? 96 : c.DeviceDpi);
+            return UiFont(pt, WeightRegular, c == null ? 96 : c.DeviceDpi);
+        }
+
+        public static Font UiFont(Control c, float pt, int weight)
+        {
+            return UiFont(pt, weight, c == null ? 96 : c.DeviceDpi);
         }
 
         public static Font UiFont(float pt, FontStyle style, int dpi)
         {
+            int weight = WeightRegular;
+            if ((style & FontStyle.Bold) != 0) weight = WeightBold;
+            return UiFont(pt, weight, dpi);
+        }
+
+        public static Font UiFont(float pt, int weight, int dpi)
+        {
             float px = Math.Max(1f, pt * dpi / 96f);
-            string key = "u" + px.ToString("0.##") + "|" + (int)style;
+            string key = "u" + px.ToString("0.##") + "|" + weight;
             lock (FontCache)
             {
                 Font f;
                 if (FontCache.TryGetValue(key, out f)) return f;
-                f = new Font(UiFamily, px, style, GraphicsUnit.Pixel);
+                f = CreateUiFont(UiFamily, px, weight);
                 FontCache[key] = f;
                 return f;
             }
@@ -426,6 +450,39 @@ namespace WallpaperChanger
                 return f;
             }
         }
+
+        // Most UI text is regular (400) or semi-bold (600). The prototype uses
+        // 700 so rarely that "bold" is remapped to 600 for UI labels and 700 is
+        // only kept for the few places that explicitly ask for it. GDI+ lets a
+        // FontStyle choose only between Regular and Bold, so intermediate
+        // weights have to be created through GDI.
+        private static Font CreateUiFont(string family, float px, int weight)
+        {
+            if (weight == WeightRegular || weight == WeightBold)
+            {
+                return new Font(family, px,
+                    weight == WeightBold ? FontStyle.Bold : FontStyle.Regular,
+                    GraphicsUnit.Pixel);
+            }
+            IntPtr hFont = CreateFont(-(int)Math.Round(px), 0, 0, 0, weight,
+                false, false, false, DEFAULT_CHARSET, 0, 0, 0, 0, family);
+            try { return Font.FromHfont(hFont); }
+            finally { DeleteObject(hFont); }
+        }
+
+        private const uint DEFAULT_CHARSET = 1;
+
+        [DllImport("gdi32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr CreateFont(int nHeight, int nWidth,
+            int nEscapement, int nOrientation, int fnWeight,
+            [MarshalAs(UnmanagedType.Bool)] bool fdwItalic,
+            [MarshalAs(UnmanagedType.Bool)] bool fdwUnderline,
+            [MarshalAs(UnmanagedType.Bool)] bool fdwStrikeOut,
+            uint fdwCharSet, uint fdwOutputPrecision, uint fdwClipPrecision,
+            uint fdwQuality, uint fdwPitchAndFamily, string lpszFace);
+
+        [DllImport("gdi32.dll")]
+        private static extern bool DeleteObject(IntPtr hObject);
 
         public static void ClearFontCache()
         {
