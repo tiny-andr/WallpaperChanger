@@ -965,13 +965,21 @@ namespace WallpaperChanger
 
             if (total <= avail)
             {
+                // One row: every segment gets the same width. Sizing each to
+                // its own text made "浅色" visibly narrower than "深色"
+                // (two CJK glyphs against two), which reads as two unrelated
+                // buttons rather than one two-way switch.
                 rows = 1;
+                int n = items.Length;
+                int each = (avail - gap * (n - 1)) / n;
+                int spare = (avail - gap * (n - 1)) - each * n;
                 int x = inner;
                 int y = inner;
-                for (int i = 0; i < items.Length; i++)
+                for (int i = 0; i < n; i++)
                 {
-                    itemRects.Add(new Rectangle(x, y, sizes[i].Width, itemH));
-                    x += sizes[i].Width + gap;
+                    int w = each + (i < spare ? 1 : 0);
+                    itemRects.Add(new Rectangle(x, y, w, itemH));
+                    x += w + gap;
                 }
                 return;
             }

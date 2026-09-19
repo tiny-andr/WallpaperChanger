@@ -386,11 +386,10 @@ namespace WallpaperChanger
             PageStack page = NewPage(null, null);
 
             // "正在显示": preview on the left, facts and actions on the right.
-            // 178px: the preview's own 210px box would force the card taller,
-            // and without the file name / path rows the right column needs
-            // only the facts, a rule and the two buttons. Sized to that, so
-            // there is no empty band left under the buttons.
-            CardPanel hero = page.AddCard(Theme.CardPad * 2 + 142);
+            // The card is as tall as the 210px preview box needs, and the right
+            // column's rows are laid out to sit inside that same 210px.
+            // Sizing the card to the right column instead clipped the preview.
+            CardPanel hero = page.AddCard(Theme.CardPad * 2 + 210);
             nowPreview = hero.AddChild(new PreviewBox(), 0, 0, 374, 210);
             nowPreview.EmptyText = Loc.T("ov.preview.none");
 
@@ -402,23 +401,23 @@ namespace WallpaperChanger
             string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
             for (int i = 0; i < 3; i++)
             {
-                factVal[i] = hero.AddChild(Txt(LabelStyle.StatNum), rx + i * 96, 52, 92, 22);
+                factVal[i] = hero.AddChild(Txt(LabelStyle.StatNum), rx + i * 96, 58, 92, 22);
                 factVal[i].Text = "0";
-                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + i * 96, 74, 92, 16);
+                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + i * 96, 80, 92, 16);
                 factLab[i].Text = Loc.T(factKeys[i]);
             }
 
-            hero.AddChild(new Rule(), rx, 100, rw, 1);
+            hero.AddChild(new Rule(), rx, 108, rw, 1);
 
             // Two equal buttons: "上一张" used to be a fixed 110px while
             // "下一张" took whatever was left, so the pair was visibly uneven.
             int btnW = (rw - Theme.GapCtl) / 2;
-            btnPrev = hero.AddChild(new FlatButton(), rx, 118, btnW, Theme.BtnH);
+            btnPrev = hero.AddChild(new FlatButton(), rx, 126, btnW, Theme.BtnH);
             btnPrev.Kind = BtnKind.Secondary;
             btnPrev.Icon = IconKind.ArrowLeft;
             btnPrev.Click += delegate { PrevWallpaper(); };
 
-            btnNext = hero.AddChild(new FlatButton(), rx + btnW + Theme.GapCtl, 118, btnW, Theme.BtnH);
+            btnNext = hero.AddChild(new FlatButton(), rx + btnW + Theme.GapCtl, 126, btnW, Theme.BtnH);
             btnNext.Kind = BtnKind.Primary;
             btnNext.Icon = IconKind.ArrowRight;
             btnNext.IconTrailing = true;
@@ -2260,19 +2259,29 @@ namespace WallpaperChanger
         }
 
         // Windows 11 draws a 1px frame line around a borderless window - the
-        // black (or accent-coloured) outline that reads as "程序四周的黑边框".
-        // DWMWA_BORDER_COLOR suppresses it; painting it in the theme's own
-        // background is the variant that also works on the builds where the
-        // "no border" sentinel is ignored.
+        // outline that reads as "程序四周的黑边框/白边". DWMWA_BORDER_COLOR is
+        // asked for no border at all; the builds that ignore the sentinel fall
+        // back to painting the line in the theme's own background, which is
+        // invisible against the window either way.
+        private const int DWMWA_COLOR_NONE = unchecked((int)0xFFFFFFFE);
+
         private void ApplyFrameBorderColor()
         {
             try
             {
-                int rgb = Theme.FormBack.R | (Theme.FormBack.G << 8) | (Theme.FormBack.B << 16);
-                DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref rgb, sizeof(int));
+                int none = DWMWA_COLOR_NONE;
+                DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref none, sizeof(int));
             }
             catch
             {
+                try
+                {
+                    int rgb = Theme.FormBack.R | (Theme.FormBack.G << 8) | (Theme.FormBack.B << 16);
+                    DwmSetWindowAttribute(Handle, DWMWA_BORDER_COLOR, ref rgb, sizeof(int));
+                }
+                catch
+                {
+                }
             }
         }
 
