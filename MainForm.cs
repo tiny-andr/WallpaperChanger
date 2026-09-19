@@ -386,12 +386,11 @@ namespace WallpaperChanger
             PageStack page = NewPage(null, null);
 
             // "正在显示": preview on the left, facts and actions on the right.
-            // The card is 160 tall rather than the design's 238: the two lines
-            // that used to fill the top of the right column (file name, path)
-            // are gone, so a 238px card would be mostly empty under the
-            // buttons. The preview keeps the design's 210px box, which is what
-            // sets the card's height.
-            CardPanel hero = page.AddCard(Theme.CardPad * 2 + 210);
+            // 178px: the preview's own 210px box would force the card taller,
+            // and without the file name / path rows the right column needs
+            // only the facts, a rule and the two buttons. Sized to that, so
+            // there is no empty band left under the buttons.
+            CardPanel hero = page.AddCard(Theme.CardPad * 2 + 142);
             nowPreview = hero.AddChild(new PreviewBox(), 0, 0, 374, 210);
             nowPreview.EmptyText = Loc.T("ov.preview.none");
 
@@ -1409,15 +1408,19 @@ namespace WallpaperChanger
         {
             if (rail == null || rotateTimer == null) return;
             bool on = rotateTimer.Enabled;
-            // Everything about the card's state is set in this one method:
-            // the dot, the caption, the countdown and the button. Two places
-            // setting parts of it is how the card ended up saying "已暂停"
-            // and a countdown at the same time.
+            // Everything about the card is set in this one method: the button's
+            // label and its colour. The card has no other content - the old
+            // dot + caption + countdown + caption stack said the same thing
+            // three ways and could disagree with itself; the two properties
+            // below are still kept in step for the footer's sake.
             rail.Rotating = on;
             rail.Countdown = on ? CountdownText() : "";
             rail.DotCaption = on ? Loc.T("rail.rotating") : Loc.T("rail.paused");
-            rail.PauseText = on ? Loc.T("rail.pause") : Loc.T("rail.resume");
+            // The label names the state the rotation is in, which is what the
+            // user asked to see on the one big button.
+            rail.PauseText = on ? Loc.T("rail.rotating") : Loc.T("rail.paused");
             rail.CountdownCaption = on ? Loc.T("rail.next") : Loc.T("rail.paused.hint");
+            rail.ButtonKind = on ? BtnKind.Primary : BtnKind.Secondary;
             rail.Invalidate();
         }
 

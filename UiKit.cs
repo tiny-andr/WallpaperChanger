@@ -1549,16 +1549,16 @@ namespace WallpaperChanger
 
     internal class NavRail : Control, IThemed
     {
-        // Vertical offsets inside .rail-status, taken from the prototype's own
-        // 136.5px card: 2x12 padding + 2x1 border around a stack of
-        // 18.75 (caption) + 6 + 28.5 (countdown) + 17.25 (its caption)
-        // + 10 + 30 (button). Keeping them named is what stops a later edit
-        // from quietly tightening the line spacing again.
-        public const int CardH = 136;
-        public const int CaptionY = 12;
-        public const int TimeY = 37;
-        public const int CapY = 66;
-        public const int ButtonY = 93;
+        // The status card is one big button and nothing else. It used to carry
+        // a dot + caption ("轮换中" / "已暂停"), a 19px countdown and a caption
+        // under it, with the button last - and the state read from three
+        // places at once. The button IS the state now: its label says which
+        // state the rotation is in and pressing it changes that state.
+        public const int CardH = 76;
+
+        // 12px padding, a 48px button, 12px padding, plus the two 1px borders.
+        public const int ButtonY = 14;
+        public const int ButtonH = 48;
 
         private string[] items = new string[0];
         private IconKind[] icons = new IconKind[0];
@@ -1574,9 +1574,11 @@ namespace WallpaperChanger
         public event EventHandler SelectedIndexChanged;
         public event EventHandler PauseClicked;
 
-        public string DotCaption = "";      // "rotating" / "paused"
-        public string Countdown = "";       // "12:34"
-        public string CountdownCaption = "";// "until next change"
+        // Kept so the host can still report the next switch time; the rail
+        // itself does not draw them any more (the footer carries the time).
+        public string DotCaption = "";
+        public string Countdown = "";
+        public string CountdownCaption = "";
 
         public NavRail()
         {
@@ -1585,9 +1587,11 @@ namespace WallpaperChanger
             Width = Theme.RailW;
 
             pauseBtn = new FlatButton();
-            pauseBtn.Kind = BtnKind.Secondary;
-            pauseBtn.Compact = true;
-            pauseBtn.Height = Theme.BtnSmallH;
+            // Primary while rotating, secondary while paused: the one control
+            // on the card is also the one thing to look at when the state
+            // changes.
+            pauseBtn.Kind = BtnKind.Primary;
+            pauseBtn.Height = ButtonH;
             pauseBtn.Click += delegate { EventHandler h = PauseClicked; if (h != null) h(this, EventArgs.Empty); };
             Controls.Add(pauseBtn);
         }
@@ -1602,6 +1606,15 @@ namespace WallpaperChanger
         {
             get { return pauseBtn.Text; }
             set { pauseBtn.Text = value ?? ""; Invalidate(); }
+        }
+
+        // Primary while rotating, secondary while paused: the single control
+        // on the card doubles as the state indicator, so its weight follows
+        // the state.
+        public BtnKind ButtonKind
+        {
+            get { return pauseBtn.Kind; }
+            set { pauseBtn.Kind = value; pauseBtn.Invalidate(); Invalidate(); }
         }
 
         public string[] Items
@@ -1658,18 +1671,14 @@ namespace WallpaperChanger
                     Math.Max(0, Width - Gfx.S(this, 24)), itemH));
             }
 
-            // See the CardH*/Y constants above: the card used to be 118 tall,
-            // which pulled its three lines together - the "line spacing is
-            // wrong" a side-by-side reading against the prototype shows.
+            // The card is one button: 12px of padding, the button, 12px.
             int cardH = Gfx.S(this, CardH);
             cardRect = new Rectangle(Gfx.S(this, 12), Math.Max(0, Height - Gfx.S(this, 12) - cardH),
                 Math.Max(0, Width - Gfx.S(this, 24)), cardH);
 
             int bx = cardRect.X + Gfx.S(this, 12);
             int bw = Math.Max(0, cardRect.Width - Gfx.S(this, 24));
-            // 93 from the card top: the countdown caption ends at 83 and the
-            // button carries a 10px gap above it.
-            pauseBtn.SetBounds(bx, cardRect.Y + Gfx.S(this, ButtonY), bw, Gfx.S(this, Theme.BtnSmallH));
+            pauseBtn.SetBounds(bx, cardRect.Y + Gfx.S(this, ButtonY), bw, Gfx.S(this, ButtonH));
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
@@ -1753,44 +1762,10 @@ namespace WallpaperChanger
                 Gfx.Line(g, Gfx.S(this, 22), sepY, Width - Gfx.S(this, 22), sepY, Theme.Border, 1f);
             }
 
-            // status card: .rail-status sits on --surface at radius 10
+            // status card: .rail-status sits on --surface at radius 10. It
+            // holds one control - the state button - and no text of its own.
             Gfx.FillRound(g, cardRect, Gfx.S(this, Theme.RadRailCard), Theme.Surface);
             Gfx.StrokeRound(g, cardRect, Gfx.S(this, Theme.RadRailCard), Theme.Border, 1f);
-
-            int px = cardRect.X + Gfx.S(this, 12);
-            int textW = Math.Max(0, cardRect.Width - Gfx.S(this, 24));
-
-            // .rs-top sits 12px in / 12px down, on an 18.75px line box, next to
-            // the status dot.
-            int dot = Gfx.S(this, 7);
-            using (SolidBrush b = new SolidBrush(rotating ? Theme.Ok : Theme.ForeMuted))
-            {
-                g.FillEllipse(b, px, cardRect.Y + Gfx.S(this, CaptionY) + Gfx.S(this, 6), dot, dot);
-            }
-            Gfx.Text(g, DotCaption, Theme.UiFont(this, Theme.FsSub), Theme.Fore,
-                new Rectangle(px + dot + Gfx.S(this, 7), cardRect.Y + Gfx.S(this, CaptionY),
-                    Math.Max(0, textW - dot - Gfx.S(this, 7)), Gfx.S(this, 19)),
-                Gfx.Ellipsis(Gfx.LeftMid));
-
-            // .rs-time: a 19px mono run on a 28.5px line box, 6px under the
-            // caption above it.
-            //
-            // Only while rotating. A paused card used to print a fixed clock
-            // time under "已暂停" - a target that the timer is not counting
-            // towards - so the card said "paused" and "next switch tomorrow
-            // 22:58" at the same time. While paused the line is empty and the
-            // caption carries the state instead.
-            if (rotating && Countdown.Length > 0)
-            {
-                Gfx.Text(g, Countdown, Theme.MonoFont(this, Theme.FsRailCount), Theme.Fore,
-                    new Rectangle(px, cardRect.Y + Gfx.S(this, TimeY), textW, Gfx.S(this, 29)),
-                    Gfx.LeftMid);
-            }
-
-            // .rs-cap: 11.5px, directly under the countdown with no extra gap.
-            Gfx.Text(g, CountdownCaption, Theme.UiFont(this, Theme.FsCap), Theme.ForeMuted,
-                new Rectangle(px, cardRect.Y + Gfx.S(this, CapY), textW, Gfx.S(this, 17)),
-                Gfx.Ellipsis(Gfx.LeftMid));
 
             // separator on the right edge
             Gfx.Line(g, Width - 0.5f, 0, Width - 0.5f, Height, Theme.Border, 1f);
