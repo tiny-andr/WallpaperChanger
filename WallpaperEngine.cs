@@ -25,7 +25,11 @@ namespace WallpaperChanger
             void GetMonitorRECT([MarshalAs(UnmanagedType.LPWStr)] string monitorID, out RECT displayRect);
             void SetBackgroundColor(uint color);
             uint GetBackgroundColor();
-            void SetPosition([MarshalAs(UnmanagedType.LPWStr)] string monitorID, DWP position);
+            // DESKTOP_WALLPAPER_POSITION. Declared as int, not as an enum: the
+            // enum overload threw E_INVALIDARG (0x80070057) from the marshaler
+            // before the call reached the shell, which sent every Apply down
+            // the slow SystemParametersInfo fallback.
+            void SetPosition([MarshalAs(UnmanagedType.LPWStr)] string monitorID, int position);
             DWP GetPosition([MarshalAs(UnmanagedType.LPWStr)] string monitorID);
             void SetSlideshow([MarshalAs(UnmanagedType.LPWStr)] string monitorID, IntPtr items, DSS direction);
             void GetSlideshow([MarshalAs(UnmanagedType.LPWStr)] string monitorID, out IntPtr items, out DSS direction);
@@ -65,28 +69,52 @@ namespace WallpaperChanger
         {
             if (string.IsNullOrEmpty(imagePath) || !System.IO.File.Exists(imagePath)) return false;
 
+            // Phase timings, or null when nobody is measuring. Set by the
+            // /flowtest diagnostic; a null check per phase costs nothing.
+            List<string> trace = null;
+            System.Diagnostics.Stopwatch sw = null;
+            if (MeasureTrace != null)
+            {
+                trace = new List<string>();
+                sw = System.Diagnostics.Stopwatch.StartNew();
+            }
+
             try
             {
                 IDesktopWallpaper dw = CreateDesktopWallpaper();
                 if (dw == null)
                 {
                     FallbackApply(imagePath, style);
+                    Mark(trace, sw, "fallback");
+                    Finish(trace);
                     return true;
                 }
+                Mark(trace, sw, "com");
+
+                // True once a monitor has actually been given the wallpaper. A
+                // position that the shell refuses (E_INVALIDARG on some
+                // configurations) must NOT send us down the fallback path: the
+                // picture is already on screen, and re-applying it through
+                // SystemParametersInfo costs hundreds of milliseconds for
+                // nothing. The style is persisted in the registry separately.
+                bool anySet = false;
 
                 if (style == WallpaperStyle.Span)
                 {
                     // empty monitor id = whole virtual desktop (span across monitors)
                     dw.SetWallpaper("", imagePath);
-                    dw.SetPosition("", DWP.Span);
+                    anySet = true;
+                    Mark(trace, sw, "set");
+                    TrySetPosition(dw, "", ToDWP(style), trace, sw, "sp");
                 }
                 else
                 {
                     uint count;
                     dw.GetMonitorDevicePathCount(out count);
+                    Mark(trace, sw, "cnt" + count);
                     if (count == 0)
                     {
-                        FallbackApply(imagePath, style);
+                        FallbackApply(imagePath, style, trace, sw);
                     }
                     else
                     {
@@ -97,26 +125,87 @@ namespace WallpaperChanger
                             string id = Marshal.PtrToStringUni(idPtr);
                             Marshal.FreeCoTaskMem(idPtr);
                             dw.SetWallpaper(id, imagePath);
-                            dw.SetPosition(id, ToDWP(style));
+                            anySet = true;
+                            Mark(trace, sw, "set" + i);
+                            TrySetPosition(dw, id, ToDWP(style), trace, sw, "pos" + i);
                         }
                     }
                 }
 
                 PersistStyleRegistry(style);
+                Mark(trace, sw, "reg");
                 NotifyShell();
+                Mark(trace, sw, "notify");
+                Finish(trace);
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                // The COM route failing is not fatal - the legacy call still
+                // sets the wallpaper - but it was completely silent, which hid
+                // the fact that the fast path never ran. Record everything that
+                // identifies it: type, HRESULT, message, first frames.
+                Mark(trace, sw, "EX:" + ex.GetType().Name + "/0x"
+                    + Marshal.GetHRForException(ex).ToString("X8") + "/" + ex.Message);
                 try
                 {
-                    FallbackApply(imagePath, style);
+                    Mark(trace, sw, "st:" + (ex.StackTrace ?? "").Replace("\r", " ").Replace("\n", " ").Substring(0,
+                        Math.Min(160, (ex.StackTrace ?? "").Length)));
+                }
+                catch { }
+                try
+                {
+                    FallbackApply(imagePath, style, trace, sw);
+                    Mark(trace, sw, "fallback");
+                    Finish(trace);
                     return true;
                 }
-                catch
+                catch (Exception ex2)
                 {
+                    Mark(trace, sw, "EX2:" + ex2.GetType().Name);
+                    Finish(trace);
                     return false;
                 }
+            }
+        }
+
+        // A diagnostic hook: when set, Apply() records how long each phase took
+        // and hands the finished list to this action. Nothing in the product
+        // sets it, so the normal path is one null check per phase.
+        public static Action<List<string>> MeasureTrace;
+
+        private static void Mark(List<string> trace, System.Diagnostics.Stopwatch sw, string phase)
+        {
+            if (trace == null) return;
+            trace.Add(phase + "=" + sw.ElapsedMilliseconds);
+        }
+
+        private static void Finish(List<string> trace)
+        {
+            if (trace == null) return;
+            Action<List<string>> h = MeasureTrace;
+            MeasureTrace = null;
+            if (h != null) h(trace);
+        }
+
+        // SetPosition is the one call the shell refuses on some setups
+        // (E_INVALIDARG from the marshaler, seen on a three-monitor desktop
+        // where SetWallpaper on the same id succeeds). The wallpaper is applied
+        // either way and the style is written to the registry, so a refusal
+        // here is recorded and stepped over - it must never cost a second
+        // full application of the image.
+        private static void TrySetPosition(IDesktopWallpaper dw, string monitorId, DWP position,
+            List<string> trace, System.Diagnostics.Stopwatch sw, string tag)
+        {
+            try
+            {
+                dw.SetPosition(monitorId, (int)position);
+                Mark(trace, sw, tag);
+            }
+            catch (Exception ex)
+            {
+                Mark(trace, sw, tag + "!failed:" + ex.GetType().Name + "/0x"
+                    + Marshal.GetHRForException(ex).ToString("X8"));
             }
         }
 
@@ -143,8 +232,18 @@ namespace WallpaperChanger
         // Legacy path: SystemParametersInfo sets the wallpaper on every monitor.
         private static void FallbackApply(string imagePath, WallpaperStyle style)
         {
+            FallbackApply(imagePath, style, null, null);
+        }
+
+        private static void FallbackApply(string imagePath, WallpaperStyle style,
+            List<string> trace, System.Diagnostics.Stopwatch sw)
+        {
             PersistStyleRegistry(style);
+            Mark(trace, sw, "reg");
             SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, imagePath, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+            Mark(trace, sw, "spi");
+            NotifyShell();
+            Mark(trace, sw, "notify");
         }
 
         // Read the current wallpaper path on every monitor (raw file path,
@@ -212,13 +311,27 @@ namespace WallpaperChanger
         }
 
         // Tell explorer to refresh the desktop without re-applying the image.
+        //
+        // Never on the caller's thread. SendMessageTimeout broadcasts to every
+        // top-level window and waits for each one, so one busy window costs the
+        // whole timeout - measured 2.5 s on a three-monitor desktop with a
+        // browser open. The wallpaper is already on screen by that point; this
+        // is only a nudge, so it goes to a background thread and its result is
+        // nobody's business.
         private static void NotifyShell()
         {
             try
             {
-                UIntPtr result;
-                SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, UIntPtr.Zero,
-                    "TraySettings", SMTO_ABORTIFHUNG, 1000, out result);
+                System.Threading.ThreadPool.QueueUserWorkItem(delegate
+                {
+                    try
+                    {
+                        UIntPtr result;
+                        SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, UIntPtr.Zero,
+                            "TraySettings", SMTO_ABORTIFHUNG, 500, out result);
+                    }
+                    catch { }
+                });
             }
             catch
             {
@@ -226,3 +339,4 @@ namespace WallpaperChanger
         }
     }
 }
+

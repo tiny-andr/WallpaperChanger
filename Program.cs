@@ -99,6 +99,16 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /flowtest <folder> [count]
+            if (args.Length > 0 && args[0].Equals("/flowtest", StringComparison.OrdinalIgnoreCase))
+            {
+                string folder = args.Length > 1 ? args[1] : null;
+                int count = 3;
+                if (args.Length > 2) int.TryParse(args[2], out count);
+                Environment.Exit(folder == null ? 2 : RunFlowTest(folder, count));
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -550,6 +560,82 @@ namespace WallpaperChanger
                 Log.Write("previewtest error: " + ex);
                 return 1;
             }
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /flowtest <folder> [n]
+        // Times every step of a "next wallpaper" click, because the steps after
+        // the thumbnail turned out not to be the slow one either:
+        //   scan -> pick -> APPLY (SystemParametersInfo) -> push history ->
+        //   refresh the card (thumbnail) -> repaint
+        // The apply step writes the wallpaper through Windows, which for a
+        // 14 MB PNG is a plausible multi-second cost that nothing else can hide.
+        private static int RunFlowTest(string folder, int count)
+        {
+            try
+            {
+                string[] files = System.IO.Directory.GetFiles(folder);
+                Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                if (files.Length == 0) { Log.Write("flowtest: no files"); return 1; }
+                int n = Math.Max(1, Math.Min(count, files.Length));
+
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(40, 40);
+                form.Show();
+                Pump(700);
+
+                System.Reflection.MethodInfo push = typeof(MainForm).GetMethod("PushHistory",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                System.Reflection.MethodInfo refresh = typeof(MainForm).GetMethod("RefreshNowCard",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+                // Only the first two: the point is the split between phases, and
+                // walking the whole folder just makes the run long.
+                n = Math.Min(n, 2);
+
+                for (int i = 0; i < n; i++)
+                {
+                    string p = files[i];
+                    Invalidate(p);
+                    double mb = new System.IO.FileInfo(p).Length / 1048576.0;
+
+                    System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                    System.Diagnostics.Stopwatch apply = System.Diagnostics.Stopwatch.StartNew();
+                    WallpaperEngine.MeasureTrace = delegate (List<string> phases)
+                    {
+                        Log.Write("flowtest   apply phases: " + string.Join(" ", phases.ToArray()));
+                    };
+                    WallpaperEngine.Apply(p, Config.Style);
+                    apply.Stop();
+                    long tApply = sw.ElapsedMilliseconds;
+                    push.Invoke(form, new object[] { p });
+                    long tPush = sw.ElapsedMilliseconds;
+                    refresh.Invoke(form, null);
+                    long tRefresh = sw.ElapsedMilliseconds;
+
+                    form.Refresh();
+                    Pump(1);
+                    long tPaint = sw.ElapsedMilliseconds;
+
+                    Log.Write(string.Format(
+                        "flowtest: {0,6:0.00} MB  apply {1,6:0} ms | push {2,5:0} | refresh {3,5:0} | paint {4,5:0} | total {5,6:0} ms  {6}",
+                        mb, apply.ElapsedMilliseconds, tPush - tApply, tRefresh - tPush, tPaint - tRefresh,
+                        tPaint, System.IO.Path.GetFileName(p)));
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("flowtest error: " + ex);
+                return 1;
+            }
+        }
+
+        private static System.Drawing.Image PreviewBoxProbe(MainForm form)
+        {
+            PreviewBox box = Field<PreviewBox>(form, "nowPreview");
+            return box == null ? null : box.Image;
         }
 
         // Deletes the thumbnail cache entries for one source file, both sizes.
