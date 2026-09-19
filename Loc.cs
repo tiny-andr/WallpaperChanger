@@ -266,6 +266,7 @@ namespace WallpaperChanger
             m["hist.back"] = "回到这张";
             m["hist.unknown.src"] = "未知来源";
             m["hist.empty"] = "本次启动还没有切换过壁纸。";
+            m["hist.recent"] = "只显示最近的 {0} 张壁纸";
             m["rot.style.note"] = "缩略图示意图片在屏幕上的铺放方式。";
             m["rot.interval.note"] = "定时到点会重新扫描源目录并挑一张新壁纸。";
             m["rot.order.note"] = "随机为洗牌后不重复播放，顺序为按文件名依次播放。";
@@ -469,6 +470,7 @@ namespace WallpaperChanger
             m["hist.back"] = "Back to this";
             m["hist.unknown.src"] = "Unknown source";
             m["hist.empty"] = "No wallpaper has been switched yet this session.";
+            m["hist.recent"] = "Showing the last {0} wallpapers only";
             m["rot.style.note"] = "The thumbnail shows how the image is laid out on screen.";
             m["rot.interval.note"] = "When the timer fires the sources are rescanned and a new wallpaper is picked.";
             m["rot.order.note"] = "Random shuffles and plays without repeats; in-order walks by filename.";
@@ -672,6 +674,7 @@ namespace WallpaperChanger
             m["hist.back"] = "この画像へ";
             m["hist.unknown.src"] = "不明なソース";
             m["hist.empty"] = "今回の起動ではまだ壁紙を切り替えていません。";
+            m["hist.recent"] = "直近 {0} 枚の壁紙のみ表示";
             m["rot.style.note"] = "サムネイルは画像の配置方法を示しています。";
             m["rot.interval.note"] = "タイマーが作動するとソースを再スキャンして新しい壁紙を選びます。";
             m["rot.order.note"] = "ランダムは重複なしで再生し、順番はファイル名順に再生します。";
@@ -864,4 +867,5 @@ namespace WallpaperChanger
         }
     }
 }
+
 

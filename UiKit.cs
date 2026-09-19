@@ -2757,13 +2757,14 @@ namespace WallpaperChanger
         private Image[] thumbs = new Image[0];
         private int currentIndex = -1;
         private string emptyText = "";
+        private string caption = "";
         private int hotIndex = -1;
         private readonly List<Rectangle> tiles = new List<Rectangle>();
 
         public event EventHandler ItemClicked;
 
         // Kept so the host can still label states elsewhere; the strip itself
-        // draws no text.
+        // draws no per-tile text.
         public string CurrentTag = "";
         public string UndoableTag = "";
         public string BackTag = "";
@@ -2781,6 +2782,17 @@ namespace WallpaperChanger
             set { emptyText = value ?? ""; Invalidate(); }
         }
 
+        // One quiet line under the tiles, e.g. "只显示最近的 5 张壁纸". It lives
+        // in this control rather than as a second card child because a card
+        // places each child at an absolute position, and this line has to sit
+        // directly under a strip whose height depends on how many tiles there
+        // are.
+        public string Caption
+        {
+            get { return caption; }
+            set { caption = value ?? ""; Relayout(); Invalidate(); }
+        }
+
         // Entries in display order (newest first); current is a position in the
         // same array. Names and metas are still accepted - the host builds them
         // for the click mapping - but the tiles show only the pictures.
@@ -2793,10 +2805,16 @@ namespace WallpaperChanger
             Invalidate();
         }
 
-        // Height one row of tiles needs at this width, plus the strip's padding.
+        // Height one row of tiles needs at this width, plus the strip's padding
+        // and the caption line under it.
         public int PreferredHeight
         {
-            get { return TileH() + PadPx * 2; }
+            get { return TileH() + PadPx * 2 + CaptionH(); }
+        }
+
+        private int CaptionH()
+        {
+            return caption.Length == 0 ? 0 : Gfx.S(this, 22);
         }
 
         private int TileH()
@@ -2913,6 +2931,16 @@ namespace WallpaperChanger
                         Gfx.LeftMid);
                 }
                 return;
+            }
+
+            // The caption sits directly under the tiles, indented to line up
+            // with the first tile's left edge.
+            if (caption.Length > 0)
+            {
+                Gfx.Text(g, caption, Theme.UiFont(this, Theme.FsCap), Theme.ForeMuted,
+                    new Rectangle(PadPx, PadPx + TileH() + Gfx.S(this, 4),
+                        Math.Max(0, Width - PadPx * 2), Gfx.S(this, 18)),
+                    Gfx.Ellipsis(Gfx.LeftMid));
             }
 
             float rad = Gfx.S(this, Theme.RadTile);

@@ -472,6 +472,7 @@ namespace WallpaperChanger
             histPage = page;
             histList = histCard.AddChild(new HistoryList(), 0, 0, 684, Gfx.S(this, 150));
             histList.EmptyText = Loc.T("hist.empty");
+            histList.Caption = Loc.F("hist.recent", 5);
             histList.ItemClicked += delegate { OnHistoryRowClicked(); };
         }
 
@@ -708,6 +709,7 @@ namespace WallpaperChanger
             histList.UndoableTag = Loc.T("hist.undoable");
             histList.BackTag = Loc.T("hist.back");
             histList.EmptyText = Loc.T("hist.empty");
+            histList.Caption = Loc.F("hist.recent", 5);
             RebuildHistory();
             RefreshStrip();
 
@@ -1124,8 +1126,6 @@ namespace WallpaperChanger
 
         // ---- "now showing" card ---------------------------------------------
 
-        private readonly HashSet<string> previewRequested =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private string lastPreviewPath;
 
         private void RefreshNowCard()
@@ -1151,27 +1151,31 @@ namespace WallpaperChanger
             nowPreview.Image = PreviewThumb(cur);
         }
 
-        // The preview needs a 16:9-ish thumbnail at the box's own size. One
-        // is generated on a background thread the first time a wallpaper is
-        // shown, then it comes straight from the disk cache.
+        // The preview needs a 16:9-ish thumbnail at the box's own size.
+        //
+        // This used to hand back null on a cache miss and show the picture only
+        // when a background task finished, which is what the user saw as "it
+        // takes five or six seconds to change". It is synchronous now, in this
+        // order:
+        //
+        //   1. the preview size, if it was cached;
+        //   2. the history tile size - the filmstrip shows the same picture and
+        //      generates its tiles at startup, so this is the common hit;
+        //   3. the tile generated right here (measured 171-753 ms for the
+        //      user's 11-22 MB originals) rather than "later, maybe".
+        //
+        // A miss can no longer leave the box empty, and the tile that gets
+        // generated is the one the filmstrip wants, so the two share it.
         private Image PreviewThumb(string path)
         {
-            Bitmap b = ThumbCache.Get(path, 374, 210);
-            if (b != null) return b;
-            if (previewRequested.Add(path))
-            {
-                Task.Run(delegate
-                {
-                    try { ThumbCache.Generate(path, 374, 210); }
-                    catch { }
-                    SafeUi(delegate
-                    {
-                        lastPreviewPath = null;
-                        RefreshNowCard();
-                    });
-                });
-            }
-            return null;
+            Bitmap exact = ThumbCache.Get(path, 374, 210);
+            if (exact != null) return exact;
+
+            Bitmap tile = ThumbCache.Get(path, HistThumbW, HistThumbH);
+            if (tile != null) return tile;
+
+            ThumbCache.Generate(path, HistThumbW, HistThumbH);
+            return ThumbCache.Get(path, HistThumbW, HistThumbH);
         }
 
         // Live echo on the sources card header: how many sources exist, how

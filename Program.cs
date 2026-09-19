@@ -89,6 +89,16 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /previewtest <folder> [count]
+            if (args.Length > 0 && args[0].Equals("/previewtest", StringComparison.OrdinalIgnoreCase))
+            {
+                string folder = args.Length > 1 ? args[1] : null;
+                int count = 3;
+                if (args.Length > 2) int.TryParse(args[2], out count);
+                Environment.Exit(folder == null ? 2 : RunPreviewTest(folder, count));
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -483,6 +493,102 @@ namespace WallpaperChanger
             }
             Log.Write("keytest: failures=" + bad);
             return bad == 0 ? 0 : 1;
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /previewtest <folder> [n]
+        // Times what the user sees: how long after switching to a wallpaper the
+        // "now showing" box actually holds a picture. The thumbnails for the
+        // files it will use are deleted first, so this measures the cold path
+        // that produced the "it takes five or six seconds" report.
+        private static int RunPreviewTest(string folder, int count)
+        {
+            try
+            {
+                string[] files = System.IO.Directory.GetFiles(folder);
+                Array.Sort(files, StringComparer.OrdinalIgnoreCase);
+                if (files.Length == 0) { Log.Write("previewtest: no files"); return 1; }
+                int n = Math.Max(1, Math.Min(count, files.Length));
+
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(40, 40);
+                form.Show();
+                Pump(700);
+
+                PreviewBox box = Field<PreviewBox>(form, "nowPreview");
+                System.Reflection.MethodInfo push = typeof(MainForm).GetMethod("PushHistory",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                System.Reflection.MethodInfo refresh = typeof(MainForm).GetMethod("RefreshNowCard",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+                // Drop the cached thumbnails for the files this will walk, at
+                // both sizes the app asks for, so every step is a cold one.
+                for (int i = 0; i < n; i++) Invalidate(files[i]);
+
+                for (int i = 0; i < n; i++)
+                {
+                    string p = files[i];
+                    System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                    push.Invoke(form, new object[] { p });
+                    refresh.Invoke(form, null);
+                    long sync = sw.ElapsedMilliseconds;
+                    long ready = -1;
+                    while (sw.ElapsedMilliseconds < 20000)
+                    {
+                        Pump(25);
+                        if (box.Image != null) { ready = sw.ElapsedMilliseconds; break; }
+                    }
+                    double mb = new System.IO.FileInfo(p).Length / 1048576.0;
+                    Log.Write(string.Format("previewtest: {0,7:0.00} MB  sync block {1} ms, image at {2} ms   {3}",
+                        mb, sync, ready, System.IO.Path.GetFileName(p)));
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("previewtest error: " + ex);
+                return 1;
+            }
+        }
+
+        // Deletes the thumbnail cache entries for one source file, both sizes.
+        private static void Invalidate(string path)
+        {
+            try
+            {
+                string cache = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "WallpaperChanger", "thumbs");
+                foreach (int[] size in new int[][] {
+                    new int[] { 374, 210 }, new int[] { 264, 148 } })
+                {
+                    string key = ThumbKey(path, size[0], size[1]);
+                    string f = System.IO.Path.Combine(cache, key + ".png");
+                    if (System.IO.File.Exists(f)) System.IO.File.Delete(f);
+                }
+            }
+            catch { }
+        }
+
+        private static string ThumbKey(string path, int w, int h)
+        {
+            long len = 0, ticks = 0;
+            try
+            {
+                System.IO.FileInfo fi = new System.IO.FileInfo(path);
+                len = fi.Length;
+                ticks = fi.LastWriteTimeUtc.Ticks;
+            }
+            catch { }
+            string seed = path + "|" + len + "|" + ticks + "|" + w + "x" + h;
+            using (System.Security.Cryptography.SHA256 sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(seed));
+                System.Text.StringBuilder sb = new System.Text.StringBuilder(32);
+                for (int i = 0; i < 16; i++) sb.Append(hash[i].ToString("x2"));
+                return sb.ToString();
+            }
         }
 
         private static T Field<T>(object o, string name) where T : class
