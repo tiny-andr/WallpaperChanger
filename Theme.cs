@@ -119,6 +119,10 @@ namespace WallpaperChanger
         public const float FsBodySm = 13f;
         public const float FsSub = 12.5f;
         public const float FsCardNote = 12f;
+        // The text inside a drop-down field. A size below the 12.5px captions
+        // and labels around it: a control that carries one short value should
+        // not shout louder than the caption above it.
+        public const float FsDropDown = 12f;
         public const float FsCap = 11.5f;
         public const float FsMono = 11f;
         public const float FsMonoSm = 11.5f;
@@ -386,6 +390,37 @@ namespace WallpaperChanger
             }
         }
 
+        // Why a second family exists at all.
+        //
+        // The design renders most labels at font-weight:500/600. GDI cannot
+        // synthesise those: CreateFont(..., 600, ...) on "Segoe UI Variable
+        // Text" comes back as the Bold face (700), measured density 0.777
+        // against the regular face's 0.555 - so every 600 label in the UI was
+        // painted at 700 and the whole window read as heavy and flat, the
+        // "看起来没有字重" complaint.
+        //
+        // Windows ships the intermediate faces as separate families. Naming
+        // the face directly is what actually selects it: "Segoe UI Variable
+        // Text Semibold" measures 0.662 and "Segoe UI Semibold" 0.653, both
+        // clearly between regular and bold, which is what the prototype's 600
+        // looks like.
+        private static string uiFamilySemi;
+
+        private static string UiFamilySemiBold
+        {
+            get
+            {
+                if (uiFamilySemi == null)
+                {
+                    uiFamilySemi = ResolveFamily(new string[] {
+                        "Segoe UI Variable Text Semibold", "Segoe UI Semibold",
+                        "Segoe UI Variable Display Semibold",
+                        "Microsoft YaHei UI" }, UiFamily);
+                }
+                return uiFamilySemi;
+            }
+        }
+
         private static string MonoFamily
         {
             get
@@ -458,16 +493,43 @@ namespace WallpaperChanger
         // weights have to be created through GDI.
         private static Font CreateUiFont(string family, float px, int weight)
         {
-            if (weight == WeightRegular || weight == WeightBold)
+            if (weight >= 700)
             {
-                return new Font(family, px,
-                    weight == WeightBold ? FontStyle.Bold : FontStyle.Regular,
-                    GraphicsUnit.Pixel);
+                return new Font(family, px, FontStyle.Bold, GraphicsUnit.Pixel);
             }
-            IntPtr hFont = CreateFont(-(int)Math.Round(px), 0, 0, 0, weight,
-                false, false, false, DEFAULT_CHARSET, 0, 0, 0, 0, family);
-            try { return Font.FromHfont(hFont); }
-            finally { DeleteObject(hFont); }
+            if (weight >= 600)
+            {
+                // The dedicated semibold face, not a synthetic bold: see
+                // UiFamilySemiBold for the measurements behind this.
+                Font semi = TryFamily(UiFamilySemiBold, px);
+                if (semi != null) return semi;
+                return new Font(family, px, FontStyle.Bold, GraphicsUnit.Pixel);
+            }
+            return new Font(family, px, FontStyle.Regular, GraphicsUnit.Pixel);
+        }
+
+        // A cache-safe construction: FontFamily throws when the face is not
+        // installed, and that must not take the whole window down.
+        private static Font TryFamily(string family, float px)
+        {
+            try
+            {
+                FontFamily ff = null;
+                foreach (FontFamily cand in FontFamily.Families)
+                {
+                    if (string.Equals(cand.Name, family, StringComparison.OrdinalIgnoreCase))
+                    {
+                        ff = cand;
+                        break;
+                    }
+                }
+                if (ff == null) return null;
+                return new Font(ff, px, FontStyle.Regular, GraphicsUnit.Pixel);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         private const uint DEFAULT_CHARSET = 1;

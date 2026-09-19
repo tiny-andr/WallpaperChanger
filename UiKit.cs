@@ -384,6 +384,17 @@ namespace WallpaperChanger
         public int PadPx { get { return Gfx.S(this, pad); } }
         public int PadXPx { get { return Gfx.S(this, PadX); } }
 
+        // Height of the card's title line ("h3" at 13.5px semibold on a 20px
+        // line box). Header controls centre on this, not on a slice of it.
+        public const int TitleH = 20;
+
+        // Extra offset so a header control's centre lands on the caption's ink
+        // centre rather than on the top of its line box. Measured on a live
+        // window: title ink 356..374 for a card top at 347, so its centre is
+        // 18px below the card's inner top, and a 36px control has to start at
+        // 356 to match. 18 - (36 - 20)/2 = 10.
+        public const int TitleNudge = 10;
+
         // Header height in device pixels (0 when the card has no header).
         public int HeaderPx
         {
@@ -574,10 +585,12 @@ namespace WallpaperChanger
                 int p = PadPx;
                 int w = Gfx.S(this, headerPlacement.W);
                 int h = Gfx.S(this, headerPlacement.H);
-                // Centre on the title line (title occupies the first 22px of
-                // the body area). The old formula added pad/2, which pushed a
-                // 30px dropdown visibly above the caption next to it.
-                int y = Math.Max(0, p + (Gfx.S(this, 22) - h) / 2);
+                // Put the control's centre on the caption's centre. Measured on
+                // a live window: the title's 18px line box starts at the body
+                // top, so its ink centres on PadTop + TitleH/2. Centring on
+                // part of the line box left the control level with the TOP of
+                // its own caption ("应该下来一点儿").
+                int y = Math.Max(0, p + (Gfx.S(this, TitleH) - h) / 2 + Gfx.S(this, TitleNudge));
                 headerPlacement.C.SetBounds(Math.Max(p, Width - p - w), y, w, h);
             }
 
@@ -1109,7 +1122,7 @@ namespace WallpaperChanger
 
             public int PreferredWidth(int minWidth)
             {
-                Font f = Theme.UiFont(owner, Theme.FsSub);
+                Font f = Theme.UiFont(owner, Theme.FsDropDown);
                 int w = minWidth;
                 foreach (string s in owner.itemList)
                 {
@@ -1130,14 +1143,14 @@ namespace WallpaperChanger
             protected override void OnDeactivate(EventArgs e)
             {
                 base.OnDeactivate(e);
-                Close();
+                CloseList();
             }
 
             protected override bool ProcessDialogKey(Keys keyData)
             {
                 // Esc closes, Enter commits, arrows move - the three things a
                 // drop-down list is expected to answer.
-                if (keyData == Keys.Escape) { Close(); return true; }
+                if (keyData == Keys.Escape) { CloseList(); return true; }
                 if (keyData == Keys.Enter) { Commit(); return true; }
                 if (keyData == Keys.Down) { Highlight(hot + 1); return true; }
                 if (keyData == Keys.Up) { Highlight(hot - 1); return true; }
@@ -1162,8 +1175,18 @@ namespace WallpaperChanger
             private void Commit()
             {
                 int i = hot;
-                Close();
+                CloseList();
                 if (i >= 0) owner.SetSelectedFromList(i);
+            }
+
+            // Every path that hides the list goes through here. Without it the
+            // owner's `open` field kept pointing at an already-closed form, so
+            // the next click ran Toggle() -> "it is open, close it" on a dead
+            // window and the list could never be opened a second time.
+            public void CloseList()
+            {
+                owner.ForgetList(this);
+                Close();
             }
 
             private int IndexAt(int y)
@@ -1181,7 +1204,7 @@ namespace WallpaperChanger
                 RectangleF all = new RectangleF(0.5f, 0.5f, Width - 1f, Height - 1f);
                 Gfx.StrokeRound(g, all, Gfx.S(this, Theme.RadMenu), Theme.Border, 1f);
 
-                Font f = Theme.UiFont(this, Theme.FsSub);
+                Font f = Theme.UiFont(this, Theme.FsDropDown);
                 int h = RowHeight;
                 for (int i = 0; i < owner.itemList.Count; i++)
                 {
@@ -1325,8 +1348,16 @@ namespace WallpaperChanger
 
         private void Toggle()
         {
-            if (open != null) { open.Close(); return; }
+            if (open != null) { open.CloseList(); return; }
             Open();
+        }
+
+        // Called by the popup as it closes, so the "is the list up" flag can
+        // never outlive the window it refers to.
+        private void ForgetList(ListForm f)
+        {
+            if (ReferenceEquals(open, f)) open = null;
+            Invalidate();
         }
 
         private void Open()
@@ -1366,8 +1397,11 @@ namespace WallpaperChanger
             int pad = Gfx.S(this, 10);
             int iconS = Gfx.S(this, 15);
             int textW = Math.Max(0, Width - pad * 2 - iconS - Gfx.S(this, 8));
+            // FsCardNote (12) rather than FsSub (12.5): the design's own
+            // drop-down-sized text. A native combo drew this at the system
+            // font, which read a size too large next to the captions.
             Gfx.Text(g, selected >= 0 && selected < itemList.Count ? itemList[selected] : "",
-                Theme.UiFont(this, Theme.FsSub), ink,
+                Theme.UiFont(this, Theme.FsDropDown), ink,
                 new Rectangle(pad, 0, textW, Height), Gfx.Ellipsis(Gfx.LeftMid));
             IconPainter.Draw(g, IconKind.ChevronDown,
                 new RectangleF(Width - pad - iconS, (Height - iconS) / 2f, iconS, iconS),
@@ -1383,7 +1417,7 @@ namespace WallpaperChanger
         // mid-open; closing it here leaves no orphan top-level window behind.
         protected override void OnHandleDestroyed(EventArgs e)
         {
-            if (open != null) { open.Close(); open = null; }
+            if (open != null) { open.CloseList(); open = null; }
             base.OnHandleDestroyed(e);
         }
     }

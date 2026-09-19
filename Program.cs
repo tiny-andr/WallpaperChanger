@@ -49,6 +49,32 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /layout [/page=N]
+            // Opens the real window, writes the on-screen rectangle of every
+            // named control to the log, then exits. UI regression scripts need
+            // real coordinates to click, and hand-copied ones go stale as soon
+            // as a card changes height.
+            if (args.Length > 0 && args[0].Equals("/layout", StringComparison.OrdinalIgnoreCase))
+            {
+                int page = 0;
+                foreach (string a in args)
+                {
+                    if (a.StartsWith("/page=", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int.TryParse(a.Substring("/page=".Length), out page);
+                    }
+                }
+                Environment.Exit(RunLayoutDump(page));
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /ddtest
+            if (args.Length > 0 && args[0].Equals("/ddtest", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunDropDownTest());
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -121,6 +147,166 @@ namespace WallpaperChanger
             }
             catch
             {
+            }
+        }
+
+        // Walk the live window and log where each control actually is, in
+        // screen coordinates, so a UI script can click real pixels. Fields are
+        // found by reflection over MainForm: the point is to report the
+        // product's own controls, not a hand-maintained list that drifts.
+        private static int RunLayoutDump(int page)
+        {
+            try
+            {
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(40, 40);
+                form.Show();
+
+                System.Reflection.MethodInfo showPage = typeof(MainForm).GetMethod("ShowPage",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (showPage != null) showPage.Invoke(form, new object[] { page });
+                for (int i = 0; i < 30; i++)
+                {
+                    System.Windows.Forms.Application.DoEvents();
+                    System.Threading.Thread.Sleep(20);
+                }
+
+                System.Drawing.Rectangle fr = form.RectangleToScreen(form.ClientRectangle);
+                Log.Write("layout: {\"window\":\"" + fr.X + "," + fr.Y + "," + fr.Width + "," + fr.Height + "\"}");
+
+                foreach (System.Reflection.FieldInfo fi in typeof(MainForm).GetFields(
+                    System.Reflection.BindingFlags.Instance |
+                    System.Reflection.BindingFlags.NonPublic |
+                    System.Reflection.BindingFlags.Public))
+                {
+                    System.Windows.Forms.Control c = fi.GetValue(form) as System.Windows.Forms.Control;
+                    if (c == null) continue;
+                    if (!c.IsHandleCreated) continue;
+                    System.Drawing.Rectangle r = c.RectangleToScreen(c.ClientRectangle);
+                    Log.Write("layout: {\"name\":\"" + fi.Name + "\",\"type\":\"" + c.GetType().Name
+                        + "\",\"rect\":\"" + r.X + "," + r.Y + "," + r.Width + "," + r.Height
+                        + "\",\"visible\":" + (c.Visible ? "true" : "false") + "}");
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("layout error: " + ex.Message);
+                return 1;
+            }
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /ddtest
+        // Opens every KitDropdown in the real window twice, picking an item in
+        // between, and reports whether the list came up each time. This is the
+        // "the drop-down only opens once" report: the second open is the one
+        // that was broken, and only the product's own click path can show it.
+        private static int RunDropDownTest()
+        {
+            int failures = 0;
+            try
+            {
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(40, 40);
+                form.Show();
+                Pump(600);
+
+                string[] fields = { "cmbStyle", "cmbInterval", "cmbOrder" };
+                System.Reflection.MethodInfo showPage = typeof(MainForm).GetMethod("ShowPage",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+
+                foreach (string f in fields) failures += DropDownCycle(form, f);
+                if (showPage != null) showPage.Invoke(form, new object[] { 2 });
+                Pump(400);
+                failures += DropDownCycle(form, "cmbLang");
+
+                form.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Write("ddtest error: " + ex);
+                failures++;
+            }
+            Log.Write("ddtest: failures=" + failures);
+            return failures == 0 ? 0 : 1;
+        }
+
+        private static int DropDownCycle(MainForm form, string field)
+        {
+            System.Reflection.FieldInfo fi = typeof(MainForm).GetField(field,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            KitDropdown box = fi == null ? null : fi.GetValue(form) as KitDropdown;
+            if (box == null || !box.Visible)
+            {
+                Log.Write("ddtest " + field + ": not found or hidden");
+                return 1;
+            }
+
+            int bad = 0;
+            for (int round = 1; round <= 3; round++)
+            {
+                Click(box);
+                Pump(200);
+                bool open = box.IsOpen;
+                if (!open) bad++;
+                Log.Write("ddtest " + field + " round " + round + ": opened=" + open
+                    + " selected=" + box.SelectedIndex + " items=" + box.Items.Length);
+                if (open)
+                {
+                    PickMiddle(box);
+                    Pump(250);
+                    if (box.IsOpen)
+                    {
+                        Log.Write("ddtest " + field + " round " + round + ": still open after picking");
+                        bad++;
+                    }
+                }
+            }
+            return bad == 0 ? 0 : 1;
+        }
+
+        private static void Click(Control c)
+        {
+            System.Reflection.MethodInfo down = typeof(Control).GetMethod("OnMouseDown",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            System.Reflection.MethodInfo up = typeof(Control).GetMethod("OnMouseUp",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            System.Windows.Forms.MouseEventArgs e =
+                new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, 5, 5, 0);
+            down.Invoke(c, new object[] { e });
+            up.Invoke(c, new object[] { e });
+        }
+
+        // Pick the row after the current one by driving the popup the way a
+        // click does, then make sure the popup took itself down.
+        private static void PickMiddle(KitDropdown box)
+        {
+            int next = box.SelectedIndex + 1;
+            if (next >= box.Items.Length) next = 0;
+            foreach (System.Windows.Forms.Form f in System.Windows.Forms.Application.OpenForms)
+            {
+                if (f == box.FindForm() || !f.Visible) continue;
+                System.Reflection.MethodInfo md = f.GetType().GetMethod("OnMouseDown",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                int rowH = (int)f.GetType().GetProperty("RowHeight").GetValue(f, null);
+                int pad = (int)f.GetType().GetProperty("ListPad").GetValue(f, null);
+                int y = pad + next * rowH + rowH / 2;
+                md.Invoke(f, new object[] {
+                    new System.Windows.Forms.MouseEventArgs(System.Windows.Forms.MouseButtons.Left, 1, 20, y, 0) });
+                return;
+            }
+        }
+
+        private static void Pump(int ms)
+        {
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            while (sw.ElapsedMilliseconds < ms)
+            {
+                System.Windows.Forms.Application.DoEvents();
+                System.Threading.Thread.Sleep(10);
             }
         }
 
