@@ -111,6 +111,29 @@ namespace WallpaperChanger
             return f | TextFormatFlags.EndEllipsis;
         }
 
+        // Truncate to fit, with a real ellipsis. TextRenderer's EndEllipsis
+        // clips GDI's glyph-run output: a run with no break opportunity - a
+        // long file name, a path - comes back sliced mid-glyph with no "…",
+        // which is exactly what the switch-history rows showed. Measuring and
+        // cutting here makes every caller behave the same.
+        public static string Fit(string s, Font f, int width, out bool truncated)
+        {
+            truncated = false;
+            if (string.IsNullOrEmpty(s) || width <= 0) return s ?? "";
+            if (TextRenderer.MeasureText(s, f).Width <= width) return s;
+            truncated = true;
+            const string dots = "…";
+            int dotsW = TextRenderer.MeasureText(dots, f).Width;
+            int lo = 0, hi = s.Length;
+            while (lo < hi)
+            {
+                int mid = (lo + hi + 1) / 2;
+                if (TextRenderer.MeasureText(s.Substring(0, mid), f).Width + dotsW <= width) lo = mid;
+                else hi = mid - 1;
+            }
+            return lo <= 0 ? dots : s.Substring(0, lo) + dots;
+        }
+
         // Honest focus ring: a rounded outline just outside the control. Only
         // asked for when the keyboard is what moved the focus - see InputMode.
         public static void FocusRing(Graphics g, RectangleF r, float rad, Control c)
@@ -1751,9 +1774,18 @@ namespace WallpaperChanger
 
             // .rs-time: a 19px mono run on a 28.5px line box, 6px under the
             // caption above it.
-            Gfx.Text(g, Countdown, Theme.MonoFont(this, Theme.FsRailCount), Theme.Fore,
-                new Rectangle(px, cardRect.Y + Gfx.S(this, TimeY), textW, Gfx.S(this, 29)),
-                Gfx.LeftMid);
+            //
+            // Only while rotating. A paused card used to print a fixed clock
+            // time under "已暂停" - a target that the timer is not counting
+            // towards - so the card said "paused" and "next switch tomorrow
+            // 22:58" at the same time. While paused the line is empty and the
+            // caption carries the state instead.
+            if (rotating && Countdown.Length > 0)
+            {
+                Gfx.Text(g, Countdown, Theme.MonoFont(this, Theme.FsRailCount), Theme.Fore,
+                    new Rectangle(px, cardRect.Y + Gfx.S(this, TimeY), textW, Gfx.S(this, 29)),
+                    Gfx.LeftMid);
+            }
 
             // .rs-cap: 11.5px, directly under the countdown with no extra gap.
             Gfx.Text(g, CountdownCaption, Theme.UiFont(this, Theme.FsCap), Theme.ForeMuted,
@@ -2939,8 +2971,10 @@ namespace WallpaperChanger
                 // secondary colour, which is exactly the case MutedStrong
                 // exists for. Seen/current rows keep full-strength fg.
                 Color nameInk = future ? Theme.MutedStrong : Theme.Fore;
-                Gfx.Text(g, names[i], useName, nameInk,
-                    new Rectangle(textX, blockTop, textW, lineH), Gfx.Ellipsis(Gfx.LeftMid));
+                bool cut;
+                string shown = Gfx.Fit(names[i], useName, Math.Max(0, textW - Gfx.S(this, 6)), out cut);
+                Gfx.Text(g, shown, useName, nameInk,
+                    new Rectangle(textX, blockTop, textW, lineH), Gfx.LeftMid);
 
                 string meta = i < metas.Length ? metas[i] : "";
                 if (meta.Length > 0)

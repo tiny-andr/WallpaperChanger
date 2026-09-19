@@ -75,6 +75,13 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /probe
+            if (args.Length > 0 && args[0].Equals("/probe", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunStateProbe());
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -308,6 +315,86 @@ namespace WallpaperChanger
                 System.Windows.Forms.Application.DoEvents();
                 System.Threading.Thread.Sleep(10);
             }
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /probe
+        // Logs the live state of the pieces that are easy to get wrong and
+        // hard to see: the rail's pause card, the overview's fact numbers, and
+        // the two hero buttons' widths.
+        private static int RunStateProbe()
+        {
+            try
+            {
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(40, 40);
+                form.Show();
+                Pump(800);
+
+                NavRail rail = Field<NavRail>(form, "rail");
+                StatusBar footer = Field<StatusBar>(form, "footer");
+                Log.Write("probe: rail rotating=" + rail.Rotating
+                    + " countdown='" + rail.Countdown + "'"
+                    + " caption='" + rail.CountdownCaption + "'"
+                    + " pauseText='" + rail.PauseText + "'");
+                Log.Write("probe: footer main='" + footer.MainText + "' sub='" + footer.SubText
+                    + "' notice='" + footer.Notice + "'");
+
+                System.Windows.Forms.Control prev = Field<System.Windows.Forms.Control>(form, "btnPrev");
+                System.Windows.Forms.Control next = Field<System.Windows.Forms.Control>(form, "btnNext");
+                if (prev != null && next != null)
+                {
+                    Log.Write("probe: buttons prev=" + prev.Width + "x" + prev.Height
+                        + " next=" + next.Width + "x" + next.Height
+                        + " equal=" + (prev.Width == next.Width));
+                }
+                for (int i = 0; i < 3; i++)
+                {
+                    System.Windows.Forms.Control v = Field<System.Windows.Forms.Control>(form, "factVal" + i);
+                    if (v != null) Log.Write("probe: fact[" + i + "]='" + v.Text + "'");
+                }
+                Log.Write("probe: hidden labels gone: lblNowName=" + (Field<System.Windows.Forms.Control>(form, "lblNowName") == null
+                    ? "absent" : "PRESENT")
+                    + " lblNowPath=" + (Field<System.Windows.Forms.Control>(form, "lblNowPath") == null ? "absent" : "PRESENT")
+                    + " lblKbdHint=" + (Field<System.Windows.Forms.Control>(form, "lblKbdHint") == null ? "absent" : "PRESENT"));
+                Log.Write("probe: interval=" + Config.IntervalMinutes + " manualPicked=" + Config.ManualPicked.Count);
+
+                // The paused state is the one the card got wrong, so report it
+                // too: the toggle goes through the product's own path.
+                System.Reflection.MethodInfo toggle = typeof(MainForm).GetMethod("TogglePause",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (toggle != null)
+                {
+                    toggle.Invoke(form, null);
+                    Pump(400);
+                    Log.Write("probe: after pause -> rotating=" + rail.Rotating
+                        + " countdown='" + rail.Countdown + "'"
+                        + " caption='" + rail.CountdownCaption + "'"
+                        + " pauseText='" + rail.PauseText + "'");
+                    toggle.Invoke(form, null);
+                    Pump(400);
+                    Log.Write("probe: after resume -> rotating=" + rail.Rotating
+                        + " countdown='" + rail.Countdown + "'"
+                        + " caption='" + rail.CountdownCaption + "'"
+                        + " pauseText='" + rail.PauseText + "'");
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("probe error: " + ex.Message);
+                return 1;
+            }
+        }
+
+        private static T Field<T>(object o, string name) where T : class
+        {
+            System.Reflection.FieldInfo fi = o.GetType().GetField(name,
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic |
+                System.Reflection.BindingFlags.Public);
+            return fi == null ? null : fi.GetValue(o) as T;
         }
 
         private static int RunSilentApply(string target)

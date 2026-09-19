@@ -18,11 +18,8 @@ namespace WallpaperChanger
 
         // ---- overview page -------------------------------------------------
         private PreviewBox nowPreview;
-        private KitLabel lblNowName;
-        private KitLabel lblNowPath;
         private FlatButton btnPrev;
         private FlatButton btnNext;
-        private KitLabel lblKbdHint;
         // The overview settings row: the three rotation knobs as editable
         // dropdowns, so changing them needs no separate page.
         private KitDropdown cmbStyle;
@@ -389,36 +386,44 @@ namespace WallpaperChanger
             PageStack page = NewPage(null, null);
 
             // "正在显示": preview on the left, facts and actions on the right.
-            CardPanel hero = page.AddCard(238);
+            // The card is 160 tall rather than the design's 238: the two lines
+            // that used to fill the top of the right column (file name, path)
+            // are gone, so a 238px card would be mostly empty under the
+            // buttons. The preview keeps the design's 210px box, which is what
+            // sets the card's height.
+            CardPanel hero = page.AddCard(Theme.CardPad * 2 + 210);
             nowPreview = hero.AddChild(new PreviewBox(), 0, 0, 374, 210);
             nowPreview.EmptyText = Loc.T("ov.preview.none");
 
             const int rx = 396, rw = 288;
-            lblNowName = hero.AddChild(Txt(LabelStyle.PreviewName), rx, 4, rw, 30);
-            lblNowPath = hero.AddChild(Txt(LabelStyle.MonoSm, true), rx, 38, rw, 18);
-            hero.AddChild(new Rule(), rx, 64, rw, 1);
-
+            // The wallpaper's own name and path are deliberately NOT shown:
+            // the preview beside them answers "what is showing", and a file
+            // name and its full path belong in Explorer, not on this card. The
+            // hint line that used to sit under the buttons went with them.
             string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
             for (int i = 0; i < 3; i++)
             {
-                factVal[i] = hero.AddChild(Txt(LabelStyle.StatNum), rx + i * 96, 78, 92, 22);
+                factVal[i] = hero.AddChild(Txt(LabelStyle.StatNum), rx + i * 96, 52, 92, 22);
                 factVal[i].Text = "0";
-                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + i * 96, 100, 92, 16);
+                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + i * 96, 74, 92, 16);
                 factLab[i].Text = Loc.T(factKeys[i]);
             }
 
-            btnPrev = hero.AddChild(new FlatButton(), rx, 126, 110, Theme.BtnH);
+            hero.AddChild(new Rule(), rx, 100, rw, 1);
+
+            // Two equal buttons: "上一张" used to be a fixed 110px while
+            // "下一张" took whatever was left, so the pair was visibly uneven.
+            int btnW = (rw - Theme.GapCtl) / 2;
+            btnPrev = hero.AddChild(new FlatButton(), rx, 118, btnW, Theme.BtnH);
             btnPrev.Kind = BtnKind.Secondary;
             btnPrev.Icon = IconKind.ArrowLeft;
             btnPrev.Click += delegate { PrevWallpaper(); };
 
-            btnNext = hero.AddChild(new FlatButton(), rx + 119, 126, rw - 119, Theme.BtnH);
+            btnNext = hero.AddChild(new FlatButton(), rx + btnW + Theme.GapCtl, 118, btnW, Theme.BtnH);
             btnNext.Kind = BtnKind.Primary;
             btnNext.Icon = IconKind.ArrowRight;
             btnNext.IconTrailing = true;
             btnNext.Click += delegate { NextWallpaper(); };
-
-            lblKbdHint = hero.AddChild(Txt(LabelStyle.Cap, true), rx, 174, rw, 18);
 
             // Settings row: the three rotation knobs as editable dropdowns.
             // They used to be a read-only echo plus an "adjust" button that
@@ -677,7 +682,12 @@ namespace WallpaperChanger
                 ? Loc.T("rail.resume") : Loc.T("rail.pause");
             rail.DotCaption = rotateTimer != null && rotateTimer.Enabled
                 ? Loc.T("rail.rotating") : Loc.T("rail.paused");
-            rail.CountdownCaption = Loc.T("rail.next");
+            // The caption is NOT decided here. ApplyTexts runs before the
+            // rotate timer exists, so a local "is the timer enabled" test
+            // answers false and stamps the paused caption onto a card that
+            // SyncRailState had already marked rotating - the card then read
+            // "已暂停" while showing a countdown. SyncRailState owns it.
+            SyncRailState();
             bar.TitleText = Loc.T("app.name");
             bar.VersionText = "v" + Application.ProductVersion;
             bar.HelpText = Loc.T("win.help");
@@ -689,7 +699,6 @@ namespace WallpaperChanger
             nowPreview.EmptyText = Loc.T("ov.preview.none");
             btnPrev.Text = Loc.T("ov.prev");
             btnNext.Text = Loc.T("ov.next");
-            lblKbdHint.Text = KbdHintText();
             string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
             for (int i = 0; i < 3; i++) factLab[i].Text = Loc.T(factKeys[i]);
             histList.CurrentTag = Loc.T("hist.cur");
@@ -752,7 +761,10 @@ namespace WallpaperChanger
             RefreshStatusLine();
         }
 
-        // The design shows the two bindings inline under the hero actions.
+        // The bindings are not shown on the overview any more: they are edited
+        // on the general page, which is where a person looks for them, and the
+        // hint line under the two buttons was noise on a card that exists to
+        // show what is on the screen right now.
         private string KbdHintText()
         {
             return Loc.F("ov.kbd.hint",
@@ -1125,11 +1137,6 @@ namespace WallpaperChanger
             factVal[1].Text = lastTotal.ToString();
             factVal[2].Text = manual ? Loc.T("ov.mode.manual") : Loc.T("ov.mode.all");
 
-            lblNowName.Text = has ? Path.GetFileName(cur) : Loc.T("ov.preview.none");
-            lblNowName.Ink = has ? (Color?)null : Theme.ForeMuted;
-            lblNowPath.Text = has ? cur : "";
-            lblKbdHint.Text = KbdHintText();
-
             if (!has)
             {
                 nowPreview.Image = null;
@@ -1175,6 +1182,7 @@ namespace WallpaperChanger
             if (total == 0)
             {
                 cardSrc.Note = Loc.T("main.source.summary.none");
+                SyncOverviewFacts();
                 return;
             }
             int off = 0;
@@ -1190,6 +1198,54 @@ namespace WallpaperChanger
             }
             cardSrc.Note = Loc.F("src.summary", total, total - off, off,
                 pending ? Loc.T("src.count.pending") : sum.ToString());
+            // The overview's own numbers come from the same counts, so they are
+            // real as soon as the folders have been scanned instead of staying
+            // "0 / 0" until a wallpaper has actually been applied.
+            SyncOverviewFacts();
+        }
+
+        // "参与轮换" / "扫描到图片" on the now-showing card, derived from the
+        // source list rather than from the last rotation attempt. Zero was the
+        // honest answer to "how many did the last pick scan" but a dishonest
+        // answer to "how many pictures do I have", which is what the card is
+        // read as - a folder with 193 images in it showed 0.
+        private void SyncOverviewFacts()
+        {
+            if (srcList == null || factVal[0] == null) return;
+            if (Config.ManualPicked.Count > 0)
+            {
+                factVal[0].Text = Config.ManualPicked.Count.ToString();
+                factVal[1].Text = SourceTotals().ToString();
+                factVal[2].Text = Loc.T("ov.mode.manual");
+                return;
+            }
+            long enabled = 0, all = 0;
+            SourceTotals(out enabled, out all);
+            factVal[0].Text = enabled.ToString();
+            factVal[1].Text = all.ToString();
+            factVal[2].Text = Loc.T("ov.mode.all");
+        }
+
+        private long SourceTotals()
+        {
+            long enabled = 0, all = 0;
+            SourceTotals(out enabled, out all);
+            return all;
+        }
+
+        private void SourceTotals(out long enabled, out long all)
+        {
+            enabled = 0;
+            all = 0;
+            if (srcList == null) return;
+            foreach (string f in srcList.Sources)
+            {
+                if (srcList.IsPending(f)) continue;
+                int n = srcList.CountOf(f);
+                if (n < 0) continue;
+                all += n;
+                if (srcList.IsOn(f)) enabled += n;
+            }
         }
 
         private static string SourceName(string folder)
@@ -1353,10 +1409,15 @@ namespace WallpaperChanger
         {
             if (rail == null || rotateTimer == null) return;
             bool on = rotateTimer.Enabled;
+            // Everything about the card's state is set in this one method:
+            // the dot, the caption, the countdown and the button. Two places
+            // setting parts of it is how the card ended up saying "已暂停"
+            // and a countdown at the same time.
             rail.Rotating = on;
+            rail.Countdown = on ? CountdownText() : "";
             rail.DotCaption = on ? Loc.T("rail.rotating") : Loc.T("rail.paused");
             rail.PauseText = on ? Loc.T("rail.pause") : Loc.T("rail.resume");
-            rail.CountdownCaption = Loc.T("rail.next");
+            rail.CountdownCaption = on ? Loc.T("rail.next") : Loc.T("rail.paused.hint");
             rail.Invalidate();
         }
 
@@ -2009,17 +2070,10 @@ namespace WallpaperChanger
             footer.Dirty = dirty;
             RefreshNowCard();
 
-            // The rail carries the same countdown as its own status card, so
-            // it has to move with it.
-            if (rail != null && rotateTimer != null && rotateTimer.Enabled)
-            {
-                rail.Countdown = CountdownText();
-                rail.Rotating = true;
-            }
-            else if (rail != null)
-            {
-                rail.Rotating = false;
-            }
+            // The rail follows the same state. It used to set `Rotating` here
+            // on its own, without the caption that goes with it, so the card
+            // could show a countdown under the paused caption.
+            SyncRailState();
         }
 
         // The moment the next automatic switch fires. A 24h interval shows
@@ -2383,8 +2437,23 @@ namespace WallpaperChanger
 
         // ---- borderless frame ----------------------------------------------
 
+        // An inactive borderless window asks for its frame to be redrawn when
+        // it is activated or deactivated, and with the title bar gone the
+        // repaint is what the user sees as a strip along the edges. Both
+        // WM_NCACTIVATE and WM_NCPAINT are answered in HandleNcMessages below.
         private const int WM_NCCALCSIZE = 0x0083;
         private const int WM_NCHITTEST = 0x0084;
+        // Activation and non-client painting. WS_THICKFRAME is kept for DWM's
+        // shadow, and that frame brings a non-client area which Windows paints
+        // itself whenever the window becomes active or INACTIVE. With
+        // WM_NCCALCSIZE answering 0 the client covers the whole window, so the
+        // frame Windows paints on activation changes lands on top of our own
+        // pixels - the strip that appears as soon as the window loses focus
+        // ("点击一下桌面空白处就会出现白边", also after opening Help).
+        private const int WM_NCACTIVATE = 0x0086;
+        private const int WM_NCPAINT = 0x0085;
+        private const int WM_SETTEXT = 0x000C;
+        private const int WM_ACTIVATE = 0x0006;
         private const int WS_THICKFRAME = 0x00040000;
         private const int WS_MINIMIZEBOX = 0x00020000;
         private const int WS_MAXIMIZEBOX = 0x00010000;
@@ -2413,6 +2482,22 @@ namespace WallpaperChanger
         private void HandleNcMessages(ref Message m)
         {
             if (m.Msg == WM_NCCALCSIZE && m.WParam != IntPtr.Zero)
+            {
+                m.Result = IntPtr.Zero;
+                return;
+            }
+            // Let the form run its own activation bookkeeping, then claim the
+            // message so the default handler cannot paint a non-client frame
+            // over the client area. Returning 1 means "already handled".
+            if (m.Msg == WM_NCACTIVATE)
+            {
+                base.WndProc(ref m);
+                m.Result = new IntPtr(1);
+                return;
+            }
+            // Nothing may be painted in the non-client area: every pixel of
+            // this window belongs to a child control.
+            if (m.Msg == WM_NCPAINT)
             {
                 m.Result = IntPtr.Zero;
                 return;
@@ -2456,3 +2541,5 @@ namespace WallpaperChanger
         }
     }
 }
+
+

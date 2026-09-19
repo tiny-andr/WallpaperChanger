@@ -219,6 +219,7 @@ namespace WallpaperChanger
             m["nav.general"] = "常规";
             m["rail.rotating"] = "轮换中";
             m["rail.paused"] = "已暂停";
+            m["rail.paused.hint"] = "不会自动切换";
             m["rail.next"] = "距下次切换";
             m["rail.pause"] = "暂停轮换";
             m["rail.resume"] = "继续轮换";
@@ -421,6 +422,7 @@ namespace WallpaperChanger
             m["nav.general"] = "General";
             m["rail.rotating"] = "Rotating";
             m["rail.paused"] = "Paused";
+            m["rail.paused.hint"] = "No automatic switching";
             m["rail.next"] = "Next change in";
             m["rail.pause"] = "Pause rotation";
             m["rail.resume"] = "Resume rotation";
@@ -623,6 +625,7 @@ namespace WallpaperChanger
             m["nav.general"] = "一般";
             m["rail.rotating"] = "ローテーション中";
             m["rail.paused"] = "一時停止中";
+            m["rail.paused.hint"] = "自動切り替えなし";
             m["rail.next"] = "次回切り替えまで";
             m["rail.pause"] = "ローテーションを停止";
             m["rail.resume"] = "ローテーションを再開";
@@ -861,3 +864,4 @@ namespace WallpaperChanger
         }
     }
 }
+
