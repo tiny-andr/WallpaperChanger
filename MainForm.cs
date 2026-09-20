@@ -225,6 +225,14 @@ namespace WallpaperChanger
             RefreshDirty();
             RefreshStrip();
             SyncRailState();
+            // Register the system-wide hotkeys now that the config has been
+            // read. OnHandleCreated runs during construction - before
+            // Config.Load() - so it registered the defaults (-1/-1, i.e.
+            // nothing) and no other path ever did it again: the keys were
+            // bound, shown and saved, and never registered with Windows.
+            // The handle check inside ApplyHotkey keeps this safe when the
+            // window has not been created yet; OnHandleCreated re-runs it.
+            ApplyHotkey();
             // The source rows show a live wallpaper count, so the first scan
             // starts as soon as the list exists rather than when the user
             // happens to open the sources page.
@@ -1368,8 +1376,14 @@ namespace WallpaperChanger
         }
 
         // (Re)register the system-wide hotkeys (next + previous) from config.
+        //
+        // The guard's silent return is why "the keys do nothing" went unnoticed:
+        // nothing in the log distinguished "registration failed" from "nobody
+        // ever asked". The line below makes the request itself visible.
         private void ApplyHotkey()
         {
+            Log.Write("hotkey: apply " + Config.Hotkey + "/" + Config.HotkeyPrev
+                + " (manager=" + (hotkeyManager != null) + ", handle=" + IsHandleCreated + ")");
             if (hotkeyManager == null || !IsHandleCreated) return;
             string problem = hotkeyManager.Set(Config.Hotkey, Config.HotkeyPrev);
             if (problem != null) SetStatus(problem);
@@ -2556,5 +2570,8 @@ namespace WallpaperChanger
         }
     }
 }
+
+
+
 
 

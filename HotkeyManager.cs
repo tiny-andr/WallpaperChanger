@@ -48,6 +48,8 @@ namespace WallpaperChanger
         // Returns null on success, otherwise a human-readable problem.
         public string Set(int next, int prev)
         {
+            Log.Write("hotkey: Set(" + next + ", " + prev + ") handle=" + owner.Handle
+                + " created=" + owner.IsHandleCreated);
             Unregister();
             if (next >= 0 && next <= 9 && next == prev)
             {
