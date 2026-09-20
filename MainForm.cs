@@ -144,18 +144,32 @@ namespace WallpaperChanger
             // - is its own dialog and stays resizable.
             MaximizeBox = false;
             MinimizeBox = true;
-            // High-DPI support: declare the 96 DPI design basis and let
-            // WinForms scale the whole layout proportionally on any monitor.
-            // Order matters: the AutoScaleMode setter resets AutoScaleDimensions,
-            // so the design basis must be assigned AFTER the mode.
-            AutoScaleMode = AutoScaleMode.Dpi;
-            AutoScaleDimensions = new SizeF(96F, 96F);
-            // Size, not ClientSize: the window keeps WS_THICKFRAME so DWM still
-            // provides snap and shadow, while WM_NCCALCSIZE suppresses the
-            // frame that WinForms measures. Its idea of the client is therefore
-            // 14px smaller than the area that actually gets painted, and asking
-            // for a 980 client produced a 994 window. Sizing the window itself
-            // is what makes WindowW mean the pixels on screen.
+            // High-DPI: the DPI-aware app scales its own layout. Do NOT let
+            // WinForms scale it as well.
+            //
+            // Every custom control and every layout call in this project
+            // converts design pixels through Gfx.S(), which is DeviceDpi/96.
+            // AutoScaleMode.Dpi multiplies by the same factor a second time, so
+            // on a 150% monitor the shell was sized 1.5x while the content
+            // boxes were scaled 1.5x *and* placed against the unscaled client
+            // rectangle: the content panel came out wider than its own window
+            // and the overview's two buttons collapsed to 32x24 and 0x24. Both
+            // factors were 1.0 at 100%, which is why every 96-DPI machine
+            // looked perfect and the 4K machine did not.
+            //
+            // AutoScaleMode.None leaves exactly one scaling mechanism - Gfx.S()
+            // - and WindowW/WindowH stay design pixels whose physical size is
+            // decided by the DPI the window lands on.
+            AutoScaleMode = AutoScaleMode.None;
+            // Size, not ClientSize: the window keeps WS_THICKFRAME for DWM's
+            // shadow and snap, while WM_NCCALCSIZE suppresses the frame that
+            // WinForms measures. Its idea of the client is 14px smaller than
+            // the area that actually gets painted, so asking for a 980 client
+            // produced a 994 window. Sizing the window itself is what makes
+            // WindowW mean the pixels on screen.
+            //
+            // This is a DESIGN size; at runtime the window is scaled by the DPI
+            // it lands on (see Theme.WindowW and Gfx.S).
             Size = new Size(Theme.WindowW, Theme.WindowH);
             MinimumSize = new Size(Theme.WindowMinW, Theme.WindowMinH);
             // No Padding: the shell has to start at (0,0) like the design's, or

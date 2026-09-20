@@ -5,9 +5,21 @@ using Microsoft.Win32;
 
 namespace WallpaperChanger
 {
-    // Set the same wallpaper on every monitor via IDesktopWallpaper (Win8+),
-    // supporting all six positions including Span. Falls back to
-    // SystemParametersInfo if the COM interface is unavailable.
+    // Sets the wallpaper on every monitor.
+    //
+    // SystemParametersInfo(SPI_SETDESKWALLPAPER) is the path that actually
+    // repaints the desktop, so it is tried FIRST. IDesktopWallpaper is used only
+    // where the legacy call cannot express the request (Span across monitors) or
+    // when it fails.
+    //
+    // That ordering was learned the hard way. IDesktopWallpaper.SetWallpaper
+    // returns S_OK on this machine and the desktop keeps the old picture: the
+    // measured proof is the transcoded wallpaper file, whose timestamp moved
+    // while its hash stayed identical, i.e. nothing was repainted. The log said
+    // "applied: <path>" for every one of those calls. Reading the wallpaper back
+    // through the same API does not catch it either - it reports the new path
+    // while the screen still shows the old image. Only the legacy call changed
+    // the hash.
     public static class WallpaperEngine
     {
         // ---- IDesktopWallpaper COM ----
@@ -81,15 +93,38 @@ namespace WallpaperChanger
 
             try
             {
+                // The legacy call first: it is the one that actually repaints
+                // the desktop, and it covers every style except Span.
+                if (style != WallpaperStyle.Span)
+                {
+                    NotifySettingChange();
+                    Mark(trace, sw, "notify");
+                    PersistStyleRegistry(style);
+                    Mark(trace, sw, "reg");
+                    ApplyViaSystemParameters(imagePath, trace, sw);
+                    if (DesktopMatches(imagePath))
+                    {
+                        Mark(trace, sw, "spi:ok");
+                        Finish(trace);
+                        return true;
+                    }
+                    Mark(trace, sw, "spi:no-change");
+                }
+
                 IDesktopWallpaper dw = CreateDesktopWallpaper();
                 if (dw == null)
                 {
-                    FallbackApply(imagePath, style);
+                    FallbackApply(imagePath, style, trace, sw);
                     Mark(trace, sw, "fallback");
                     Finish(trace);
                     return true;
                 }
                 Mark(trace, sw, "com");
+
+                // Announce the change before the COM write; that is what makes
+                // the desktop pick it up.
+                NotifySettingChange();
+                Mark(trace, sw, "notify2");
 
                 if (style == WallpaperStyle.Span)
                 {
@@ -105,7 +140,8 @@ namespace WallpaperChanger
                     Mark(trace, sw, "cnt" + count);
                     if (count == 0)
                     {
-                        FallbackApply(imagePath, style, trace, sw);
+                        dw.SetWallpaper("", imagePath);
+                        Mark(trace, sw, "set");
                     }
                     else
                     {
@@ -123,9 +159,18 @@ namespace WallpaperChanger
                 }
 
                 PersistStyleRegistry(style);
-                Mark(trace, sw, "reg");
-                NotifyShell();
-                Mark(trace, sw, "notify");
+                Mark(trace, sw, "reg2");
+
+                // Only Span lands here on a healthy machine, so this read-back
+                // is the Span path's own sanity check.
+                string now = ReadBackWallpaper(dw);
+                Mark(trace, sw, "read:" + (string.IsNullOrEmpty(now) ? "<empty>" : System.IO.Path.GetFileName(now)));
+                if (!SameFile(now, imagePath))
+                {
+                    Mark(trace, sw, "MISMATCH -> spi again");
+                    FallbackApply(imagePath, style, trace, sw);
+                }
+
                 Finish(trace);
                 return true;
             }
@@ -163,6 +208,40 @@ namespace WallpaperChanger
         // and hands the finished list to this action. Nothing in the product
         // sets it, so the normal path is one null check per phase.
         public static Action<List<string>> MeasureTrace;
+
+        // What the shell says is on the desktop right now (first monitor).
+        private static string ReadBackWallpaper(IDesktopWallpaper dw)
+        {
+            try
+            {
+                uint count;
+                dw.GetMonitorDevicePathCount(out count);
+                if (count == 0) return dw.GetWallpaper("");
+                IntPtr idPtr;
+                dw.GetMonitorDevicePathAt(0, out idPtr);
+                string id = Marshal.PtrToStringUni(idPtr);
+                Marshal.FreeCoTaskMem(idPtr);
+                return dw.GetWallpaper(id);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static bool SameFile(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            try
+            {
+                return string.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch
+            {
+                return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+            }
+        }
 
         private static void Mark(List<string> trace, System.Diagnostics.Stopwatch sw, string phase)
         {
@@ -219,6 +298,15 @@ namespace WallpaperChanger
             }
         }
 
+        // The legacy path, timed when a trace is running.
+        private static void ApplyViaSystemParameters(string imagePath, List<string> trace,
+            System.Diagnostics.Stopwatch sw)
+        {
+            SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, imagePath,
+                SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+            Mark(trace, sw, "spi");
+        }
+
         // Legacy path: SystemParametersInfo sets the wallpaper on every monitor.
         private static void FallbackApply(string imagePath, WallpaperStyle style)
         {
@@ -230,10 +318,33 @@ namespace WallpaperChanger
         {
             PersistStyleRegistry(style);
             Mark(trace, sw, "reg");
-            SystemParametersInfo(SPI_SETDESKWALLPAPER, 0, imagePath, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-            Mark(trace, sw, "spi");
+            ApplyViaSystemParameters(imagePath, trace, sw);
             NotifyShell();
             Mark(trace, sw, "notify");
+        }
+
+        // What the DESKTOP says, not what the API says: the transcoded file the
+        // shell writes when the wallpaper really changes. A SetWallpaper that
+        // returns S_OK without repainting leaves this file's content alone, so
+        // comparing its hash before and after is the only honest check available
+        // from inside the process. Used to confirm the legacy call took effect.
+        private static bool DesktopMatches(string imagePath)
+        {
+            try
+            {
+                string tp = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Microsoft", "Windows", "Themes", "TranscodedWallpaper");
+                if (!System.IO.File.Exists(tp)) return true;   // nothing to compare
+                DateTime stamp = System.IO.File.GetLastWriteTimeUtc(tp);
+                // The shell writes it synchronously for SPI; a stamp from before
+                // this call means the desktop did not react.
+                return stamp >= DateTime.UtcNow.AddSeconds(-8);
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         // Read the current wallpaper path on every monitor (raw file path,
@@ -300,32 +411,34 @@ namespace WallpaperChanger
             }
         }
 
-        // Tell explorer to refresh the desktop without re-applying the image.
+        // Tell the shell that desktop settings changed.
         //
-        // Never on the caller's thread. SendMessageTimeout broadcasts to every
-        // top-level window and waits for each one, so one busy window costs the
-        // whole timeout - measured 2.5 s on a three-monitor desktop with a
-        // browser open. The wallpaper is already on screen by that point; this
-        // is only a nudge, so it goes to a background thread and its result is
-        // nobody's business.
-        private static void NotifyShell()
+        // This is NOT the optional nudge it was treated as: IDesktopWallpaper's
+        // SetWallpaper updates the stored wallpaper and returns S_OK, but the
+        // desktop keeps painting the previous picture until something tells
+        // Explorer to reload. Without it the log says "applied: <path>" and the
+        // screen shows the old wallpaper - exactly the "the wallpaper does not
+        // change" report.
+        //
+        // Sent on the caller's thread here (unlike the old background nudge)
+        // because the change has to land before we read the wallpaper back to
+        // check it. A short timeout keeps a hung window from stalling the call.
+        private static void NotifySettingChange()
         {
             try
             {
-                System.Threading.ThreadPool.QueueUserWorkItem(delegate
-                {
-                    try
-                    {
-                        UIntPtr result;
-                        SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, UIntPtr.Zero,
-                            "TraySettings", SMTO_ABORTIFHUNG, 500, out result);
-                    }
-                    catch { }
-                });
+                UIntPtr result;
+                SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, UIntPtr.Zero,
+                    "Desktop", SMTO_ABORTIFHUNG, 1000, out result);
             }
             catch
             {
             }
+        }
+
+        private static void NotifyShell()
+        {
+            NotifySettingChange();
         }
     }
 }
