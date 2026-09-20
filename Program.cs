@@ -109,6 +109,25 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /dpiwindow <targetDpi> <pngPath>
+            if (args.Length > 0 && args[0].Equals("/dpiwindow", StringComparison.OrdinalIgnoreCase))
+            {
+                int want = 144;
+                if (args.Length > 1) int.TryParse(args[1], out want);
+                string png = args.Length > 2 ? args[2] : "dpiwindow.png";
+                Environment.Exit(RunDpiWindow(want, png));
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /dpitest [targetDpi]
+            if (args.Length > 0 && args[0].Equals("/dpitest", StringComparison.OrdinalIgnoreCase))
+            {
+                int want = 144;
+                if (args.Length > 1) int.TryParse(args[1], out want);
+                Environment.Exit(RunDpiTest(want));
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -676,6 +695,165 @@ namespace WallpaperChanger
                 return sb.ToString();
             }
         }
+
+        // Diagnostic:  WallpaperChanger.exe /dpitest [targetDpi]
+        // Moves the window between monitors with different scaling - the "drag it
+        // to the 4K screen" case - and reports the DPI every layer believes it is
+        // on. If a child reports a different DPI than its parent, the child is
+        // painted at one scale inside a box laid out at another, which is how the
+        // text ends up overlapping the controls.
+        // Diagnostic:  WallpaperChanger.exe /dpiwindow <targetDpi> <pngPath>
+        // Opens the real window on the monitor with that scaling, waits for the
+        // layout to settle, and writes a PNG of it. This is the honest way to
+        // look at a 150% window from a process that is not itself on that
+        // monitor: the coordinate spaces of a caller sitting on a 100% screen do
+        // not describe the 4K window at all.
+        private static int RunDpiWindow(int targetDpi, string pngPath)
+        {
+            try
+            {
+                System.Windows.Forms.Screen target = FindMonitorAtDpi(targetDpi);
+                if (target == null)
+                {
+                    Log.Write("dpiwindow: no monitor at " + targetDpi + " DPI");
+                    return 2;
+                }
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(target.Bounds.X + 60, target.Bounds.Y + 60);
+                form.Show();
+                Pump(2000);
+
+                Log.Write("dpiwindow: " + target.DeviceName + " formDpi=" + form.DeviceDpi
+                    + " size=" + form.Width + "x" + form.Height
+                    + " fontPx=" + (form.Font.SizeInPoints * form.DeviceDpi / 72.0).ToString("0.0"));
+
+                using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(form.Width, form.Height))
+                {
+                    bool ok = false;
+                    using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
+                    {
+                        IntPtr hdc = g.GetHdc();
+                        try { ok = PrintWindow(form.Handle, hdc, 2); }
+                        finally { g.ReleaseHdc(hdc); }
+                    }
+                    bmp.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Log.Write("dpiwindow: saved " + pngPath + " (" + bmp.Width + "x" + bmp.Height + ", ok=" + ok + ")");
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("dpiwindow error: " + ex);
+                return 1;
+            }
+        }
+
+        private static System.Windows.Forms.Screen FindMonitorAtDpi(int targetDpi)
+        {
+            foreach (System.Windows.Forms.Screen s in System.Windows.Forms.Screen.AllScreens)
+            {
+                IntPtr mon = MonitorFromPoint(new POINT
+                {
+                    X = s.Bounds.X + s.Bounds.Width / 2,
+                    Y = s.Bounds.Y + s.Bounds.Height / 2
+                }, 0);
+                uint dx = 0, dy = 0;
+                if (mon != IntPtr.Zero && GetDpiForMonitor(mon, 0, out dx, out dy) == 0
+                    && (int)dx == targetDpi)
+                {
+                    return s;
+                }
+            }
+            return null;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+
+        private static int RunDpiTest(int targetDpi)
+        {
+            try
+            {
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                System.Windows.Forms.Screen target = null;
+                foreach (System.Windows.Forms.Screen s in System.Windows.Forms.Screen.AllScreens)
+                {
+                    IntPtr mon = MonitorFromPoint(new POINT
+                    {
+                        X = s.Bounds.X + s.Bounds.Width / 2,
+                        Y = s.Bounds.Y + s.Bounds.Height / 2
+                    }, 0);
+                    uint dx = 0, dy = 0;
+                    if (mon != IntPtr.Zero && GetDpiForMonitor(mon, 0, out dx, out dy) == 0
+                        && (int)dx == targetDpi)
+                    {
+                        target = s;
+                        break;
+                    }
+                }
+                if (target == null)
+                {
+                    Log.Write("dpitest: no monitor at " + targetDpi + " DPI");
+                    return 2;
+                }
+
+                form.Location = new System.Drawing.Point(target.Bounds.X + 60, target.Bounds.Y + 60);
+                form.Show();
+                Pump(1200);
+                Report(form, "on " + target.DeviceName + " (want " + targetDpi + " DPI)");
+
+                foreach (System.Windows.Forms.Screen s in System.Windows.Forms.Screen.AllScreens)
+                {
+                    if (s.DeviceName == target.DeviceName) continue;
+                    form.Location = new System.Drawing.Point(s.Bounds.X + 60, s.Bounds.Y + 60);
+                    Pump(1200);
+                    Report(form, "moved to " + s.DeviceName);
+                    form.Location = new System.Drawing.Point(target.Bounds.X + 60, target.Bounds.Y + 60);
+                    Pump(1200);
+                    Report(form, "moved back to " + target.DeviceName);
+                    break;
+                }
+
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("dpitest error: " + ex);
+                return 1;
+            }
+        }
+
+        private static void Report(MainForm form, string label)
+        {
+            System.Windows.Forms.Control content = Field<System.Windows.Forms.Control>(form, "content");
+            System.Windows.Forms.Control prev = Field<System.Windows.Forms.Control>(form, "btnPrev");
+            System.Windows.Forms.Control next = Field<System.Windows.Forms.Control>(form, "btnNext");
+            System.Windows.Forms.Control hero = Field<System.Windows.Forms.Control>(form, "nowPreview");
+            Log.Write(string.Format(
+                "dpitest {0}: formDpi={1} size={2}x{3} fontPx={4:0.0} | content={5}x{6} dpi={7} | prev={8}x{9} dpi={10} | next={11}x{12} | preview={13}x{14} dpi={15}",
+                label, form.DeviceDpi, form.Width, form.Height,
+                form.Font.SizeInPoints * form.DeviceDpi / 72.0,
+                content == null ? -1 : content.Width, content == null ? -1 : content.Height,
+                content == null ? -1 : content.DeviceDpi,
+                prev == null ? -1 : prev.Width, prev == null ? -1 : prev.Height,
+                prev == null ? -1 : prev.DeviceDpi,
+                next == null ? -1 : next.Width, next == null ? -1 : next.Height,
+                hero == null ? -1 : hero.Width, hero == null ? -1 : hero.Height,
+                hero == null ? -1 : hero.DeviceDpi));
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct POINT { public int X, Y; }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
+
+        [System.Runtime.InteropServices.DllImport("shcore.dll")]
+        private static extern int GetDpiForMonitor(IntPtr mon, int type, out uint x, out uint y);
 
         private static T Field<T>(object o, string name) where T : class
         {

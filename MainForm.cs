@@ -2270,6 +2270,63 @@ namespace WallpaperChanger
             if (StartPosition == FormStartPosition.CenterScreen) CenterToScreen();
         }
 
+        // Everything that only makes sense once the window has a DPI.
+        //
+        // Runs on handle creation AND on every DPI change: moving the window to
+        // a monitor with different scaling sends WM_DPICHANGED, and without this
+        // the window kept its 96-DPI size while the self-painted controls
+        // redrew at the new scale - text ended up drawn at the old size on top
+        // of boxes laid out at the new one, which is the overlapping mess in
+        // the "dragged it to the 4K screen" screenshot.
+        private void SyncToCurrentDpi()
+        {
+            int dpi = DeviceDpi > 0 ? DeviceDpi : 96;
+
+            // The form's Font is what every control that does not paint itself
+            // inherits. It was built once, in the constructor, from a hardcoded
+            // 9pt - so it stayed 9pt physical and shrank relative to the layout
+            // at 150%. Rebuild it from the live DPI, and drop the font cache so
+            // the self-painted controls pick the new size up too.
+            Theme.ClearFontCache();
+            float pt = 9f * dpi / 96f;
+            Font = new Font(UiFontFamily, pt, FontStyle.Regular, GraphicsUnit.Point);
+
+            // Same reason: the window is a fixed design size whose physical
+            // pixels depend on the DPI it is on.
+            Size wanted = new Size(
+                (int)Math.Round(Theme.WindowW * dpi / 96.0),
+                (int)Math.Round(Theme.WindowH * dpi / 96.0));
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            wanted.Width = Math.Min(wanted.Width, wa.Width);
+            wanted.Height = Math.Min(wanted.Height, wa.Height);
+            if (Size != wanted) Size = wanted;
+            MinimumSize = new Size(Theme.WindowMinW, Theme.WindowMinH);
+
+            LayoutChrome();
+            if (bar != null) bar.SyncWindowState(WindowState);
+            Invalidate(true);
+        }
+
+        private static string UiFontFamily
+        {
+            get { return Theme.UiFontFamilyName; }
+        }
+
+        // WM_DPICHANGED: the window moved to a monitor with other scaling.
+        protected override void OnDpiChangedAfterParent(EventArgs e)
+        {
+            base.OnDpiChangedAfterParent(e);
+            SyncToCurrentDpi();
+            Log.Write("ui: dpi changed -> " + DeviceDpi + " client=" + ClientSize);
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            Log.Write("ui: WM_DPICHANGED " + e.DeviceDpiOld + " -> " + e.DeviceDpiNew);
+            SyncToCurrentDpi();
+        }
+
         // The handle is (re)created on show and on DPI changes - (re)register
         // the hotkey each time so it never goes stale.
         protected override void OnHandleCreated(EventArgs e)
@@ -2292,7 +2349,9 @@ namespace WallpaperChanger
             }
             ApplyFrameBorderColor();
             UpdateMaximizedBounds();
-            LayoutChrome();
+            // Font, window size and chrome all follow the DPI the window landed
+            // on. OnHandleCreated knows it for the first time here.
+            SyncToCurrentDpi();
         }
 
         // Windows 11 draws a 1px frame line around a borderless window - the

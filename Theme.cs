@@ -390,6 +390,15 @@ namespace WallpaperChanger
             }
         }
 
+        // The resolved UI family name, for callers that build a Font themselves.
+        // The form's own base font is the one that matters: every control that
+        // does not paint itself inherits it, so it has to name the same family
+        // the self-painted controls use.
+        public static string UiFontFamilyName
+        {
+            get { return UiFamily; }
+        }
+
         // Why a second family exists at all.
         //
         // The design renders most labels at font-weight:500/600. GDI cannot
