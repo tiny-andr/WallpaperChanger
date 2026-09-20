@@ -2,7 +2,7 @@
 ; Build:  "C:\Users\Administrator\InnoSetup6\ISCC.exe" WallpaperChanger.iss
 
 #define MyAppName "WallpaperChanger"
-#define MyAppVersion "2.0.1"
+#define MyAppVersion "2.0.2"
 #define MyAppExe "WallpaperChanger.exe"
 
 [Setup]
@@ -44,5 +44,6 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 
 [Run]
 Filename: "{app}\{#MyAppExe}"; Description: "启动 {#MyAppName}"; Tasks: runnow; Flags: nowait postinstall skipifsilent
+
 
 
