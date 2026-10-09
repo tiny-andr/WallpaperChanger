@@ -79,6 +79,15 @@ namespace WallpaperChanger
             return StrCmpLogicalW(a, b);
         }
 
+        // Same order, reversible: the picker offers "file name A-Z" and "Z-A"
+        // and they must be exact mirrors, which negating the one comparer
+        // guarantees in a way a second implementation would not.
+        public static int NaturalCompare(string a, string b, bool descending)
+        {
+            int c = StrCmpLogicalW(a, b);
+            return descending ? -c : c;
+        }
+
         // Cheap magic-byte check to drop corrupted / fake files without decoding.
         private static bool LooksLikeImage(string file, string ext)
         {

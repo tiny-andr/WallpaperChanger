@@ -191,6 +191,14 @@ namespace WallpaperChanger
             m["picker.src.all"] = "全部壁纸";
             m["picker.src.picked"] = "已选中的壁纸 ({0})";
             m["picker.src.one"] = "{0}（{1} 张）";
+            m["picker.sort.label"] = "排序:";
+            m["picker.sort.name"] = "文件名 A → Z";
+            m["picker.sort.namedesc"] = "文件名 Z → A";
+            m["picker.sort.newest"] = "修改时间 新 → 旧";
+            m["picker.sort.oldest"] = "修改时间 旧 → 新";
+            m["picker.sort.biggest"] = "文件大小 大 → 小";
+            m["picker.sort.smallest"] = "文件大小 小 → 大";
+            m["picker.sort.reading"] = "正在读取文件大小与修改时间…";
             m["picker.nosrcpick"] = "还没有勾选任何壁纸，切换到\"全部壁纸\"开始挑选";
             m["picker.caption"] = "手动壁纸选择";
 
@@ -395,6 +403,14 @@ namespace WallpaperChanger
             m["picker.src.all"] = "All wallpapers";
             m["picker.src.picked"] = "Checked wallpapers ({0})";
             m["picker.src.one"] = "{0} ({1})";
+            m["picker.sort.label"] = "Sort:";
+            m["picker.sort.name"] = "File name A → Z";
+            m["picker.sort.namedesc"] = "File name Z → A";
+            m["picker.sort.newest"] = "Modified newest first";
+            m["picker.sort.oldest"] = "Modified oldest first";
+            m["picker.sort.biggest"] = "Size largest first";
+            m["picker.sort.smallest"] = "Size smallest first";
+            m["picker.sort.reading"] = "Reading file sizes and dates...";
             m["picker.nosrcpick"] = "Nothing is checked yet - switch to \"All wallpapers\" to start picking";
             m["picker.caption"] = "Manual wallpaper selection";
 
@@ -599,6 +615,14 @@ namespace WallpaperChanger
             m["picker.src.all"] = "すべての壁紙";
             m["picker.src.picked"] = "選択済みの壁紙 ({0})";
             m["picker.src.one"] = "{0}（{1} 枚）";
+            m["picker.sort.label"] = "並び順:";
+            m["picker.sort.name"] = "ファイル名 A → Z";
+            m["picker.sort.namedesc"] = "ファイル名 Z → A";
+            m["picker.sort.newest"] = "更新日時 新しい順";
+            m["picker.sort.oldest"] = "更新日時 古い順";
+            m["picker.sort.biggest"] = "ファイルサイズ 大きい順";
+            m["picker.sort.smallest"] = "ファイルサイズ 小さい順";
+            m["picker.sort.reading"] = "ファイルサイズと更新日時を読み込み中…";
             m["picker.nosrcpick"] = "まだ壁紙が選択されていません。「すべての壁紙」に切り替えて選んでください";
             m["picker.caption"] = "手動壁紙選択";
 

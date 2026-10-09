@@ -22,6 +22,19 @@ namespace WallpaperChanger
             }
         }
 
+        // Test hook: point the config and log at a throwaway directory. The
+        // persistence test has to write, close and re-read the ini the way a
+        // restart does, and doing that against the real file would clobber the
+        // user's settings. Nothing in the product sets this.
+        internal static string DataDirOverride
+        {
+            set
+            {
+                if (value == null) dataDir = null;
+                else dataDir = value;
+            }
+        }
+
         private static void Init()
         {
             string dir = AppDomain.CurrentDomain.BaseDirectory;
@@ -81,6 +94,13 @@ namespace WallpaperChanger
         // a different scaling factor.
         public static int WindowWidth = 0;
         public static int WindowHeight = 0;
+
+        // Sort order of the manual picker's grid, as the index of its own
+        // SortMode enum: 0 file name A-Z (the historical order), 1 Z-A,
+        // 2 modified newest first, 3 oldest first, 4 largest first,
+        // 5 smallest first. Out-of-range values fall back to 0 on load, so a
+        // hand-edited ini cannot break the picker.
+        public static int PickerSort = 0;
 
         // Manual wallpaper picker: the checked file set alone decides the mode.
         // When ManualPicked is non-empty, every forward switch (manual next,
@@ -206,6 +226,12 @@ namespace WallpaperChanger
                 if (single.TryGetValue("random", out v)) RandomOrder = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+                if (single.TryGetValue("sort", out v))
+                {
+                    int n;
+                    if (int.TryParse(v, out n) && n >= 0 && n <= 5) PickerSort = n;
+                    else PickerSort = 0;
+                }
                 if (single.TryGetValue("language", out v))
                 {
                     v = v.Trim().ToLowerInvariant();
@@ -281,6 +307,7 @@ namespace WallpaperChanger
                 sb.AppendLine("random=" + (RandomOrder ? "1" : "0"));
                 sb.AppendLine("auto_start=" + (AutoStart ? "1" : "0"));
                 sb.AppendLine("recursive=" + (Recursive ? "1" : "0"));
+                sb.AppendLine("sort=" + PickerSort);
                 sb.AppendLine("hotkey=" + Hotkey);
                 sb.AppendLine("hotkey_prev=" + HotkeyPrev);
                 if (WindowWidth > 0 && WindowHeight > 0)

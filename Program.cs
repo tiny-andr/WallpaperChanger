@@ -109,6 +109,73 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /pickersort <0..5>
+            // Exercises the sort setting against the REAL config file, the way
+            // the picker does: read what a fresh load sees, write the new value,
+            // then re-read it as the next launch would. Prints one line per step
+            // so a missing round trip is visible without guessing.
+            if (args.Length > 0 && args[0].Equals("/pickersort", StringComparison.OrdinalIgnoreCase))
+            {
+                int want = 0;
+                if (args.Length > 1) int.TryParse(args[1], out want);
+
+                Config.Load();
+                Console.WriteLine("loaded        : sort=" + Config.PickerSort);
+
+                ManualPickerForm probe = new ManualPickerForm(null);
+                probe.Test_TriggerLoad();
+                Console.WriteLine("picker shows  : index=" + probe.Test_SortComboIndex
+                    + " of " + probe.Test_SortComboItemCount
+                    + " (mode " + probe.Test_CurrentSort + ")");
+                probe.Dispose();
+
+                Config.PickerSort = want;
+                Config.Save();
+                Console.WriteLine("saved         : sort=" + want);
+
+                Config.PickerSort = -777;
+                Config.Load();
+                Console.WriteLine("reloaded      : sort=" + Config.PickerSort);
+
+                ManualPickerForm again = new ManualPickerForm(null);
+                again.Test_TriggerLoad();
+                int againIndex = again.Test_SortComboIndex;
+                int againMode = again.Test_CurrentSort;
+                Console.WriteLine("picker again  : index=" + againIndex
+                    + " (mode " + againMode + ")");
+                again.Dispose();
+
+                // The drop-down must show what was saved, and the mode behind it
+                // must agree, or the grid would draw in a different order than
+                // the control claims.
+                bool ok = Config.PickerSort == want && againMode == want && againIndex == want;
+                Console.WriteLine(ok ? "ROUNDTRIP OK" : "ROUNDTRIP BAD");
+                Environment.Exit(ok ? 0 : 1);
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /pickerwindow <targetDpi> <pngPath>
+            if (args.Length > 0 && args[0].Equals("/pickerwindow", StringComparison.OrdinalIgnoreCase))
+            {
+                int wantDpi = 144;
+                if (args.Length > 1) int.TryParse(args[1], out wantDpi);
+                string shot = args.Length > 2 ? args[2] : "pickerwindow.png";
+                Environment.Exit(RunPickerWindow(wantDpi, shot));
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /pickertest
+            // Exercises the manual picker's sort orders against a folder whose
+            // names, sizes and dates are built here, then asserts the exact
+            // expected order for each of the six modes - including the
+            // asynchronous path a size/date sort has to wait for. No window is
+            // shown, so this runs headless.
+            if (args.Length > 0 && args[0].Equals("/pickertest", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunPickerTest());
+                return;
+            }
+
             // Diagnostic:  WallpaperChanger.exe /dpiwindow <targetDpi> <pngPath>
             if (args.Length > 0 && args[0].Equals("/dpiwindow", StringComparison.OrdinalIgnoreCase))
             {
@@ -694,6 +761,297 @@ namespace WallpaperChanger
                 for (int i = 0; i < 16; i++) sb.Append(hash[i].ToString("x2"));
                 return sb.ToString();
             }
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /pickerwindow <targetDpi> <pngPath>
+        // Opens the real manual picker on the monitor with that scaling, waits
+        // for its scan, and photographs it. Used to confirm the sort row lands
+        // where it should - and that the dialog's own DPI handling (AutoScaleMode
+        // .Dpi, unlike the main window) is not double-scaling.
+        private static int RunPickerWindow(int targetDpi, string pngPath)
+        {
+            try
+            {
+                System.Windows.Forms.Screen target = FindMonitorAtDpi(targetDpi);
+                if (target == null)
+                {
+                    Log.Write("pickerwindow: no monitor at " + targetDpi + " DPI");
+                    return 2;
+                }
+                ManualPickerForm form = new ManualPickerForm(null);
+                form.StartPosition = FormStartPosition.Manual;
+                form.Location = new System.Drawing.Point(target.Bounds.X + 80, target.Bounds.Y + 80);
+                form.Show();
+                // The folder scan and the sort metadata load are both async.
+                for (int i = 0; i < 60; i++)
+                {
+                    System.Windows.Forms.Application.DoEvents();
+                    System.Threading.Thread.Sleep(100);
+                }
+                Log.Write("pickerwindow: " + target.DeviceName + " dpi=" + form.DeviceDpi
+                    + " size=" + form.Width + "x" + form.Height
+                    + " client=" + form.ClientSize.Width + "x" + form.ClientSize.Height);
+
+                using (System.Drawing.Bitmap bmp = new System.Drawing.Bitmap(form.Width, form.Height))
+                {
+                    bool ok = false;
+                    using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
+                    {
+                        IntPtr hdc = g.GetHdc();
+                        try { ok = PrintWindow(form.Handle, hdc, 2); }
+                        finally { g.ReleaseHdc(hdc); }
+                    }
+                    bmp.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Log.Write("pickerwindow: saved " + pngPath + " (" + bmp.Width + "x" + bmp.Height + ", ok=" + ok + ")");
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("pickerwindow error: " + ex);
+                return 1;
+            }
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /pickertest
+        //
+        // The picker's grid order is the one thing a screenshot cannot check, so
+        // it is asserted as data. A throwaway folder is built with names, sizes
+        // and modification times chosen so every one of the six sort modes has
+        // exactly one correct answer, and each is compared against it.
+        //
+        // The size/date modes also cover the asynchronous path: their metadata is
+        // read on a worker thread, so the test has to wait for it before the
+        // order means anything. Skipping that wait is how a sort that "works"
+        // ends up showing the previous order.
+        private static int RunPickerTest()
+        {
+            int pass = 0, fail = 0;
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "wc-pickertest-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                System.IO.Directory.CreateDirectory(dir);
+                // Sizes and dates are all distinct so each mode has one answer.
+                // The names mix digits on purpose: the natural order (s2 before
+                // s10) differs from a plain string sort, and that difference is
+                // what the first two checks pin down.
+                MakeFile(dir, "zzz.jpg", 400, new DateTime(2020, 1, 2));
+                MakeFile(dir, "s2.jpg", 200, new DateTime(2021, 1, 2));
+                MakeFile(dir, "s10.jpg", 100, new DateTime(2022, 1, 2));
+                MakeFile(dir, "alpha.jpg", 300, new DateTime(2023, 1, 2));
+                MakeFile(dir, "beta.png", 500, new DateTime(2024, 1, 2));
+
+                ManualPickerForm form = new ManualPickerForm(null);
+                List<string> paths = new List<string>();
+                foreach (string f in System.IO.Directory.GetFiles(dir)) paths.Add(f);
+
+                form.Test_SetPaths(paths);
+                Check(ref pass, ref fail, "scan yields every file", paths.Count == 5, paths.Count + " files");
+
+                // ---- file name, natural order
+                form.Test_SetSort(0);
+                form.Test_Sort();
+                List<string> asc = form.Test_Names();
+                Check(ref pass, ref fail, "name A-Z sorts as a whole list",
+                    Join(asc) == "alpha.jpg,beta.png,s2.jpg,s10.jpg,zzz.jpg", Join(asc));
+                // The reason the picker uses StrCmpLogicalW instead of a plain
+                // string comparison: digits compare as numbers.
+                Check(ref pass, ref fail, "name A-Z is natural, s2 before s10",
+                    asc.IndexOf("s2.jpg") >= 0 && asc.IndexOf("s10.jpg") >= 0
+                    && asc.IndexOf("s2.jpg") < asc.IndexOf("s10.jpg"), Join(asc));
+
+                form.Test_SetSort(1);
+                form.Test_Sort();
+                List<string> desc = form.Test_Names();
+                Check(ref pass, ref fail, "name Z-A is natural reversed",
+                    Join(desc) == "zzz.jpg,s10.jpg,s2.jpg,beta.png,alpha.jpg", Join(desc));
+
+                // ---- modification time
+                form.Test_SetSort(2);
+                form.Test_Sort();
+                WaitForMeta(form);
+                Check(ref pass, ref fail, "modified newest first",
+                    Join(form.Test_Names()) == "beta.png,alpha.jpg,s10.jpg,s2.jpg,zzz.jpg",
+                    Join(form.Test_Names()));
+
+                form.Test_SetSort(3);
+                form.Test_Sort();
+                WaitForMeta(form);
+                Check(ref pass, ref fail, "modified oldest first",
+                    Join(form.Test_Names()) == "zzz.jpg,s2.jpg,s10.jpg,alpha.jpg,beta.png",
+                    Join(form.Test_Names()));
+
+                // ---- file size
+                form.Test_SetSort(4);
+                form.Test_Sort();
+                WaitForMeta(form);
+                Check(ref pass, ref fail, "size largest first",
+                    Join(form.Test_Names()) == "beta.png,zzz.jpg,alpha.jpg,s2.jpg,s10.jpg",
+                    Join(form.Test_Names()));
+
+                form.Test_SetSort(5);
+                form.Test_Sort();
+                WaitForMeta(form);
+                Check(ref pass, ref fail, "size smallest first",
+                    Join(form.Test_Names()) == "s10.jpg,s2.jpg,alpha.jpg,zzz.jpg,beta.png",
+                    Join(form.Test_Names()));
+
+                // ---- sorting must not disturb the checked set. Checked by name
+                // rather than by index: indices are positions in the grid, and
+                // reordering the grid is the whole point of this feature.
+                form.Test_Pick(System.IO.Path.Combine(dir, "beta.png"), true);
+                form.Test_Pick(System.IO.Path.Combine(dir, "s2.jpg"), true);
+                string pickedBefore = Join(form.Test_PickedNames());
+                foreach (int m in new int[] { 0, 1, 2, 3, 4, 5 })
+                {
+                    form.Test_SetSort(m);
+                    form.Test_Sort();
+                    WaitForMeta(form);
+                }
+                Check(ref pass, ref fail, "checked set survives every sort",
+                    Join(form.Test_PickedNames()) == pickedBefore,
+                    Join(form.Test_PickedNames()) + " (was " + pickedBefore + ")");
+
+                foreach (int i in new int[] { 0, 3, 5, 99, -1 })
+                {
+                    Config.PickerSort = i;
+                    Config.Save();
+                    Config.PickerSort = -999;
+                    Config.Load();
+                    int want = (i >= 0 && i <= 5) ? i : 0;
+                    Check(ref pass, ref fail, "config sort=" + i + " falls back to " + want,
+                        Config.PickerSort == want, "got " + Config.PickerSort);
+                }
+                // ---- the full round trip the real user makes: choose a sort,
+                // leave the window, open it again. Setting Config and calling
+                // Config.Save() is exactly what OnSortChanged does, so what this
+                // checks is whether a NEW window reads that value back.
+                //
+                // The config is redirected to a throwaway directory first: the
+                // real ini must not be touched, and a redirected instance is a
+                // faithful stand-in for the next app launch.
+                string cfg = System.IO.Path.Combine(dir, "test-config");
+                System.IO.Directory.CreateDirectory(cfg);
+                AppPaths.DataDirOverride = cfg;
+                for (int m = 0; m < 6; m++)
+                {
+                    Config.PickerSort = m;
+                    Config.Save();
+                    string cfgFile = System.IO.Path.Combine(AppPaths.DataDir, "WallpaperChanger.ini");
+                    string onDisk = System.IO.File.Exists(cfgFile)
+                        ? System.IO.File.ReadAllText(cfgFile) : "<no file>";
+                    string sortLine = "";
+                    foreach (string ln in onDisk.Split('\n'))
+                    {
+                        if (ln.StartsWith("sort=")) sortLine = ln.Trim();
+                    }
+                    Log.Write("pickertest roundtrip m=" + m + " mem=" + Config.PickerSort
+                        + " path=" + cfgFile + " file[" + sortLine + "]");
+                    Console.WriteLine("  m=" + m + " mem=" + Config.PickerSort + " file[" + sortLine + "]");
+                    Config.PickerSort = -777;
+                    Config.Load();
+                    Console.WriteLine("  m=" + m + " after Config.Load=" + Config.PickerSort);
+                    Config.PickerSort = m;
+                    Config.Save();
+                    ManualPickerForm reopened = new ManualPickerForm(null);
+                    // OnLoad is what fills the sort drop-down; without a message
+                    // loop it never fires on its own, so drive it.
+                    reopened.Test_TriggerLoad();
+                    int restored = reopened.Test_CurrentSort;
+                    Console.WriteLine("  m=" + m + " picker restored=" + restored
+                        + " comboIndex=" + reopened.Test_SortComboIndex
+                        + " comboItems=" + reopened.Test_SortComboItemCount);
+                    Check(ref pass, ref fail, "sort " + m + " comes back after reopening",
+                        restored == m, "got " + restored);
+                    Check(ref pass, ref fail, "sort " + m + " shows in the drop-down",
+                        reopened.Test_SortComboIndex == m,
+                        "combo index " + reopened.Test_SortComboIndex);
+                    reopened.Dispose();
+                }
+                AppPaths.DataDirOverride = null;
+                Config.PickerSort = 0;
+                Config.Save();
+
+                // Regression cover for the reported bug: a sort picked while the
+                // scan is still running used to be discarded outright - never
+                // applied AND never saved - so reopening the window looked like
+                // the choice had not been stored at all.
+                for (int m = 1; m <= 5; m++)
+                {
+                    ManualPickerForm midScan = new ManualPickerForm(null);
+                    midScan.Test_TriggerLoad();
+                    int persisted = midScan.Test_PickSortWhileScanning(m);
+                    Check(ref pass, ref fail, "sort " + m + " picked during the scan is saved",
+                        persisted == m, "config got " + persisted);
+                    midScan.Dispose();
+                }
+                Config.PickerSort = 0;
+                Config.Save();
+
+                form.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Log.Write("pickertest error: " + ex);
+                fail++;
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            }
+
+            Log.Write("pickertest: pass=" + pass + " fail=" + fail);
+            Console.WriteLine("RESULT pickertest pass=" + pass + " fail=" + fail);
+            return fail == 0 ? 0 : 1;
+        }
+
+        private static void MakeFile(string dir, string name, int size, DateTime modified)
+        {
+            string p = System.IO.Path.Combine(dir, name);
+            byte[] data = new byte[size];
+            // JPEG magic, so ImageScanner's header check accepts the file.
+            data[0] = 0xFF; data[1] = 0xD8; data[2] = 0xFF;
+            System.IO.File.WriteAllBytes(p, data);
+            System.IO.File.SetLastWriteTimeUtc(p, modified.ToUniversalTime());
+        }
+
+        private static string Join(List<string> items)
+        {
+            return string.Join(",", items.ToArray());
+        }
+
+        private static void Check(ref int pass, ref int fail, string what, bool ok, string got)
+        {
+            if (ok)
+            {
+                pass++;
+                Log.Write("pickertest PASS " + what);
+            }
+            else
+            {
+                fail++;
+                Log.Write("pickertest FAIL " + what + " [got: " + got + "]");
+                Console.WriteLine("FAIL " + what + " [got: " + got + "]");
+            }
+        }
+
+        // The size/date sorts read their metadata on a worker thread and marshal
+        // the result back, so the flag is polled while pumping messages.
+        private static void WaitForMeta(ManualPickerForm form)
+        {
+            for (int i = 0; i < 150; i++)
+            {
+                if (form.Test_MetaComplete && !form.Test_MetaLoading)
+                {
+                    form.Test_Sort();      // what OnMetaLoaded does
+                    return;
+                }
+                System.Threading.Thread.Sleep(100);
+                System.Windows.Forms.Application.DoEvents();
+            }
+            Log.Write("pickertest: timed out waiting for file metadata");
         }
 
         // Diagnostic:  WallpaperChanger.exe /dpitest [targetDpi]

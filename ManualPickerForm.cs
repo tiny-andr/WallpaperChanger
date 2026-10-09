@@ -23,6 +23,8 @@ namespace WallpaperChanger
         private Button btnInvert;
         private Label lblSource;
         private ComboBox cmbSource;
+        private Label lblSort;
+        private KitDropdown cmbSort;
         private TextBox txtFilter;
         private Label lblPlaceholder;
         private Label lblCount;
@@ -35,6 +37,24 @@ namespace WallpaperChanger
 
         private readonly List<string> allPaths = new List<string>();
         private readonly HashSet<string> picked = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // Grid order. allPaths stays sorted by this at all times and
+        // FilteredPaths() preserves it, so every view (all / one source /
+        // checked / filtered) comes out in the same order.
+        private SortMode sortMode = SortMode.NameAsc;
+        private bool metaLoading;
+        private bool metaComplete;
+        private int scanStamp;
+
+        // Size and modification time per file, filled in only when a sort that
+        // needs them is selected: sorting by name reads nothing from disk.
+        private readonly Dictionary<string, FileMeta> meta = new Dictionary<string, FileMeta>(StringComparer.OrdinalIgnoreCase);
+
+        private struct FileMeta
+        {
+            public long Size;
+            public long Ticks;
+        }
 
         // Per-source split of the scan so the source filter can show a single
         // source at a time. ownerOf maps a normalized path to the index of the
@@ -54,6 +74,19 @@ namespace WallpaperChanger
         private float sf = 1f;
 
         private enum SrcFilter { All, Picked, One }
+
+        // Order of the thumbnail grid. The numeric values are the ini encoding:
+        // Config.PickerSort stores this enum's index, so the order of these
+        // members is part of the config format - append, do not reorder.
+        private enum SortMode
+        {
+            NameAsc = 0,     // file name A-Z (natural: img2 before img10)
+            NameDesc = 1,    // file name Z-A
+            Newest = 2,      // modification time, newest first
+            Oldest = 3,      // modification time, oldest first
+            Biggest = 4,     // file size, largest first
+            Smallest = 5     // file size, smallest first
+        }
 
         public ManualPickerForm(Form owner)
         {
@@ -138,6 +171,23 @@ namespace WallpaperChanger
             lblPlaceholder.Click += delegate { txtFilter.Focus(); };
             Controls.Add(lblPlaceholder);
 
+            // Sort order. Lives on the same row as the source filter rather
+            // than a row of its own: the two are the same kind of control (what
+            // the grid shows) and a third row would eat the grid's height. With
+            // a single source - where the source filter is hidden - it is alone
+            // on that row, so it still costs no extra height.
+            lblSort = new Label();
+            lblSort.Text = Loc.T("picker.sort.label");
+            lblSort.AutoSize = true;
+            lblSort.TextAlign = ContentAlignment.MiddleLeft;
+            lblSort.SetBounds(0, 16, 50, 22);
+            Controls.Add(lblSort);
+
+            cmbSort = new KitDropdown();
+            cmbSort.SetBounds(0, 12, 190, Theme.InputH);
+            cmbSort.SelectedIndexChanged += delegate { OnSortChanged(); };
+            Controls.Add(cmbSort);
+
             lblCount = new Label();
             lblCount.Text = Loc.F("picker.count", 0, 0);
             lblCount.AutoSize = false;
@@ -217,6 +267,7 @@ namespace WallpaperChanger
 
             LayoutChrome();
             UpdateHint();
+            BuildSortCombo();
             StartScan();
         }
 
@@ -252,21 +303,28 @@ namespace WallpaperChanger
             int right = ClientSize.Width - (int)(14 * sf);
             int gap = (int)(10 * sf);
 
-            // The source filter owns a row of its own above the button row.
-            // It must never share a line with the buttons: a long source name
-            // used to stretch the combo across the row and push the bulk
-            // buttons off the left edge. The combo also stays deliberately
-            // narrow - it is a filter, not a headline - so its width is capped
-            // well below the window width no matter how long the names are.
+            // Top row, laid out left to right: sort, then the source filter when
+            // it applies. The sort control owns the left end and never yields -
+            // it is useful with a single source, where the source filter does
+            // not even appear. The source dropdown takes whatever is left, so a
+            // long source name cannot push the sort control off the row.
             int left = (int)(14 * sf);
             bool srcRow = cmbSource != null && cmbSource.Visible;
-            int rowTop = srcRow ? (int)(48 * sf) : (int)(12 * sf);
+            int rowTop = (int)(12 * sf);
+
+            lblSort.Location = new Point(left, rowTop + (int)(4 * sf));
+            int sortGap = (int)(8 * sf);
+            cmbSort.SetBounds(lblSort.Right + sortGap, rowTop,
+                (int)(190 * sf), Gfx.S(cmbSort, Theme.InputH));
+
             if (srcRow)
             {
-                lblSource.Location = new Point(left, (int)(14 * sf) + (int)(4 * sf));
-                cmbSource.Location = new Point(lblSource.Right + (int)(6 * sf), (int)(14 * sf));
+                int srcLeft = cmbSort.Right + (int)(22 * sf);
+                lblSource.Location = new Point(srcLeft, rowTop + (int)(4 * sf));
+                cmbSource.Location = new Point(lblSource.Right + (int)(6 * sf), rowTop);
+                int afterLabel = lblSource.Right + (int)(6 * sf);
+                int roomy = Math.Max((int)(160 * sf), right - afterLabel);
                 int want = MeasureComboWidth();
-                int roomy = Math.Max((int)(160 * sf), right - cmbSource.Left);
                 cmbSource.Width = Math.Max((int)(160 * sf),
                     Math.Min(Math.Min(want, (int)(240 * sf)), roomy));
                 cmbSource.DropDownWidth = cmbSource.Width;
@@ -349,6 +407,10 @@ namespace WallpaperChanger
                         }
                     }
                 }
+                // The natural file-name order, kept as the starting point even
+                // though ApplySort re-sorts below: it is what the metadata
+                // builder's fallback comparison uses, so the order stays
+                // predictable whichever sort is restored from the config.
                 merged.Sort(delegate (string a, string b) { return ImageScanner.NaturalCompare(a, b); });
                 SafeUi(delegate { OnScanDone(merged, folders, owner); });
             });
@@ -356,6 +418,9 @@ namespace WallpaperChanger
 
         private void OnScanDone(List<string> found, List<string> folders, Dictionary<string, int> owner)
         {
+            scanStamp++;
+            meta.Clear();
+            metaComplete = false;
             allPaths.Clear();
             allPaths.AddRange(found);
 
@@ -392,6 +457,11 @@ namespace WallpaperChanger
                 ShowGridInfo(Loc.T("picker.nofolders"));
                 return;
             }
+            // Apply the sort that was restored from the config. Without this the
+            // grid came up in file-name order on every open no matter what the
+            // drop-down said - the saved order only appeared if the user happened
+            // to re-pick it.
+            ApplySort();
             RefreshView();
         }
 
@@ -573,6 +643,250 @@ namespace WallpaperChanger
             finally { comboUpdating = false; }
         }
 
+        // Fill the sort drop-down from the localised names and restore the saved
+        // choice. The initial SelectedIndex assignment must not look like a user
+        // click, or it would re-sort (and re-save) on every open.
+        private void BuildSortCombo()
+        {
+            if (cmbSort == null) return;
+            sortMode = (SortMode)Math.Max(0, Math.Min(5, Config.PickerSort));
+            comboUpdating = true;
+            try
+            {
+                cmbSort.Items = new string[] {
+                    Loc.T("picker.sort.name"),
+                    Loc.T("picker.sort.namedesc"),
+                    Loc.T("picker.sort.newest"),
+                    Loc.T("picker.sort.oldest"),
+                    Loc.T("picker.sort.biggest"),
+                    Loc.T("picker.sort.smallest")
+                };
+                cmbSort.SelectedIndex = (int)sortMode;
+            }
+            finally
+            {
+                comboUpdating = false;
+            }
+        }
+
+        private void OnSortChanged()
+        {
+            if (comboUpdating || cmbSort == null) return;
+            SortMode want = (SortMode)Math.Max(0, Math.Min(5, cmbSort.SelectedIndex));
+            if (want == sortMode) return;
+            sortMode = want;
+
+            // Recorded and saved even while the scan is still running. The
+            // display cannot follow yet - there is nothing to sort - but the
+            // choice itself must survive: dropping it here made a sort picked
+            // during the scan look like it had never been saved at all, because
+            // it never reached the config either.
+            Config.PickerSort = (int)sortMode;
+            Config.Save();
+
+            if (!scanFinished) return;
+            ApplySort();
+            UpdateCountText();
+        }
+
+        // Sort allPaths in place. Name sorts are free - the name is already in
+        // the path - so they never touch the disk. Size and date need file
+        // metadata, which is read once into `meta` and reused; reading it on
+        // every refresh would stat the whole library each time.
+        private void ApplySort()
+        {
+            switch (sortMode)
+            {
+                case SortMode.NameDesc:
+                    allPaths.Sort(delegate (string a, string b) { return ImageScanner.NaturalCompare(a, b, true); });
+                    break;
+                case SortMode.NameAsc:
+                    allPaths.Sort(delegate (string a, string b) { return ImageScanner.NaturalCompare(a, b); });
+                    break;
+                default:
+                    if (!MetaReady())
+                    {
+                        EnsureMeta();
+                        return;      // EnsureMeta re-sorts when it finishes
+                    }
+                    allPaths.Sort(delegate (string a, string b)
+                    {
+                        FileMeta ma, mb;
+                        if (!meta.TryGetValue(Normalize(a), out ma)) ma = default(FileMeta);
+                        if (!meta.TryGetValue(Normalize(b), out mb)) mb = default(FileMeta);
+                        bool bySize = sortMode == SortMode.Biggest || sortMode == SortMode.Smallest;
+                        long ka = bySize ? ma.Size : ma.Ticks;
+                        long kb = bySize ? mb.Size : mb.Ticks;
+                        int c = kb.CompareTo(ka);                       // biggest / newest first
+                        if (sortMode == SortMode.Smallest || sortMode == SortMode.Oldest) c = -c;
+                        // Equal values keep a stable, predictable order instead of
+                        // whatever the sort happened to leave behind.
+                        if (c == 0) c = ImageScanner.NaturalCompare(a, b);
+                        return c;
+                    });
+                    break;
+            }
+            // Refresh here rather than at each call site: the order and what is
+            // on screen have to change together, including when the metadata a
+            // size/date sort needs only arrives later.
+            RefreshView();
+            LayoutChrome();
+        }
+
+        // True once the metadata a size/date sort needs is available. Name sorts
+        // never ask, so an unread metadata cache cannot block them.
+        private bool MetaReady()
+        {
+            if (!NeedsMeta()) return true;
+            if (allPaths.Count == 0) return true;
+            return metaComplete;
+        }
+
+        // ---- test hooks -------------------------------------------------
+        // Drive the sort without a mouse or a visible window. The grid order is
+        // the one thing a screenshot cannot check reliably, so it is exposed as
+        // data instead. See Program.cs /pickertest.
+        internal int Test_SetPaths(List<string> paths)
+        {
+            scanStamp++;
+            meta.Clear();
+            metaComplete = false;
+            allPaths.Clear();
+            allPaths.AddRange(paths);
+            scanFinished = true;
+            return allPaths.Count;
+        }
+
+        internal void Test_SetSort(int index)
+        {
+            sortMode = (SortMode)Math.Max(0, Math.Min(5, index));
+            Config.PickerSort = (int)sortMode;
+        }
+
+        internal List<string> Test_Names()
+        {
+            List<string> r = new List<string>();
+            foreach (string p in FilteredPaths()) r.Add(Path.GetFileName(p));
+            return r;
+        }
+
+        internal bool Test_MetaComplete { get { return metaComplete; } }
+        internal bool Test_MetaLoading { get { return metaLoading; } }
+        internal int Test_CurrentSort { get { return (int)sortMode; } }
+        internal int Test_SortComboIndex { get { return cmbSort == null ? -99 : cmbSort.SelectedIndex; } }
+        internal int Test_SortComboItemCount { get { return cmbSort == null ? -99 : cmbSort.Items.Length; } }
+
+        // The sort drop-down is filled in OnLoad, so a test that never shows the
+        // form measures nothing. These two let it drive OnLoad explicitly
+        // instead of depending on a message loop it does not have.
+        internal void Test_TriggerLoad()
+        {
+            OnLoad(EventArgs.Empty);
+        }
+
+        internal void Test_ApplySortForTest()
+        {
+            ApplySort();
+        }
+
+        // Regression cover for "the sort I picked was not saved": choosing a
+        // sort while the scan is still running must reach the config even though
+        // the grid cannot reorder yet. Picks the item the way the drop-down does
+        // and runs the same handler a click would.
+        internal int Test_PickSortWhileScanning(int index)
+        {
+            scanFinished = false;
+            allPaths.Clear();
+            comboUpdating = false;
+            cmbSort.SelectedIndex = index;   // raises SelectedIndexChanged
+            return Config.PickerSort;
+        }
+
+        internal void Test_Sort()
+        {
+            ApplySort();
+        }
+
+        internal void Test_Pick(string path, bool on)
+        {
+            string n = Normalize(path);
+            if (on) picked.Add(n); else picked.Remove(n);
+        }
+
+        internal List<string> Test_PickedNames()
+        {
+            List<string> r = new List<string>();
+            foreach (string p in allPaths)
+            {
+                if (picked.Contains(Normalize(p))) r.Add(Path.GetFileName(p));
+            }
+            return r;
+        }
+
+        internal void Test_ApplySavedPicks()
+        {
+            picked.Clear();
+            HashSet<string> saved = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string p in Config.ManualPicked)
+            {
+                try { saved.Add(Normalize(p)); }
+                catch { }
+            }
+            foreach (string p in allPaths)
+            {
+                if (saved.Contains(Normalize(p))) picked.Add(Normalize(p));
+            }
+        }
+
+        private bool NeedsMeta()
+        {
+            return sortMode == SortMode.Newest || sortMode == SortMode.Oldest
+                || sortMode == SortMode.Biggest || sortMode == SortMode.Smallest;
+        }
+
+        // Read size and modification time for every scanned file, off the UI
+        // thread. The whole grid keeps its previous order until this lands, so
+        // switching sort never blocks the window.
+        private void EnsureMeta()
+        {
+            if (metaLoading || allPaths.Count == 0) return;
+            metaLoading = true;
+            int stamp = scanStamp;
+            string[] paths = allPaths.ToArray();
+            ShowGridInfo(Loc.T("picker.sort.reading"));
+            Task.Run(delegate
+            {
+                Dictionary<string, FileMeta> built = new Dictionary<string, FileMeta>(StringComparer.OrdinalIgnoreCase);
+                foreach (string p in paths)
+                {
+                    try
+                    {
+                        FileInfo fi = new FileInfo(p);
+                        FileMeta m;
+                        m.Size = fi.Exists ? fi.Length : 0;
+                        m.Ticks = fi.Exists ? fi.LastWriteTimeUtc.Ticks : 0;
+                        built[Normalize(p)] = m;
+                    }
+                    catch
+                    {
+                    }
+                }
+                SafeUi(delegate { OnMetaLoaded(built, stamp); });
+            });
+        }
+
+        private void OnMetaLoaded(Dictionary<string, FileMeta> built, int stamp)
+        {
+            metaLoading = false;
+            if (stamp != scanStamp || IsDisposed) return;
+            meta.Clear();
+            foreach (KeyValuePair<string, FileMeta> kv in built) meta[kv.Key] = kv.Value;
+            metaComplete = true;
+            ApplySort();
+            RefreshView();
+            UpdateCountText();
+        }
+
         private void OnSourceFilterChanged()
         {
             if (comboUpdating || !scanFinished || cmbSource == null) return;
@@ -710,3 +1024,4 @@ namespace WallpaperChanger
         }
     }
 }
+
