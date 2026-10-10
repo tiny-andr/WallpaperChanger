@@ -49,9 +49,12 @@ namespace WallpaperChanger
     //     never triggers work in a tight loop.
     internal class PickerCanvas : ScrollableControl
     {
-        // Five tiles per row, not seven: a 258px tile is the size the new
-        // design reads at, and five of them plus margins is what keeps the
-        // window inside the space the main window leaves for it.
+        // Baseline tile count, used only for the dialog's minimum width (see
+        // ManualPickerForm.OnLoad). The grid itself no longer uses a fixed
+        // count: Relayout derives the real column count from the window width,
+        // so a wide or maximised window fills edge to edge instead of leaving
+        // an empty band on the right. 258px is the tile size the design reads
+        // at.
         public const int DesignCols = 5;
         private const int DesignCellW = 258;
         private const int DesignCellImgH = 145;
@@ -214,16 +217,52 @@ namespace WallpaperChanger
             relayoutTimer.Stop();
             if (paths.Count == 0 || ClientSize.Width < 40) return;
 
-            cols = DesignCols;
-            rows = (paths.Count + cols - 1) / cols;
-            int contentW = spacing + cols * (cellW + spacing);
             int rowH = cellImgH + cellLabelH;
+
+            // Columns follow the real window width instead of a fixed design
+            // count, so a wide (or maximised) window is filled instead of
+            // leaving a large empty band on the right. Tiles keep their size,
+            // so the thumbnail cache stays valid across resizes.
+            cols = ColumnsFor(ClientSize.Width);
+            rows = (paths.Count + cols - 1) / cols;
             int contentH = spacing + rows * (rowH + spacing);
+
+            // The vertical scrollbar is a real child control sitting INSIDE the
+            // client area, so its width has to come off the usable width. Only
+            // bother when the layout is actually taller than the viewport, and
+            // note this can never oscillate: dropping a column adds a row, so
+            // the scrollbar is still needed afterwards.
+            if (contentH > ClientSize.Height)
+            {
+                int narrower = ColumnsFor(ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
+                if (narrower < cols)
+                {
+                    cols = narrower;
+                    rows = (paths.Count + cols - 1) / cols;
+                    contentH = spacing + rows * (rowH + spacing);
+                }
+            }
+
+            // contentW is capped at the width it was computed from, so in
+            // practice no horizontal scrollbar appears.
+            int contentW = spacing + cols * (cellW + spacing);
             AutoScrollMinSize = new Size(contentW, contentH);
             if (forceResetScroll) AutoScrollPosition = new Point(0, 0);
             Invalidate();
             // Queued items survive a relayout; make sure a drain is coming.
             DispatchDecoder();
+        }
+
+        // How many tiles fit in the given width. Needs at least one tile to fit
+        // (the dialog's MinimumSize guarantees that), in which case contentW
+        // stays within the width it was computed from and no horizontal
+        // scrollbar appears.
+        private int ColumnsFor(int availableWidth)
+        {
+            int pitch = cellW + spacing;
+            if (pitch <= 0) return 1;
+            int n = (availableWidth - spacing) / pitch;
+            return n < 1 ? 1 : n;
         }
 
         // Refill the queue with everything not already cached or in flight.

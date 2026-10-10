@@ -45,7 +45,7 @@ Grab the latest installer from the [Releases](../../releases) page (`WallpaperCh
 
 No .NET runtime needed — the app is self-contained.
 
-> Current version: **v2.0.5** (interface rebuilt from scratch)
+> Current version: **v2.0.6** (interface rebuilt from scratch)
 
 ## Usage
 

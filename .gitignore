@@ -16,6 +16,10 @@ WallpaperChanger.ini
 .idea/
 *.user
 
+# agent instructions (local working notes, deliberately not tracked)
+AGENTS.md
+AGENTS.local.md
+
 # temporary files: UI-driving harnesses, release notes, push logs
 .tmp-*/
 .tmp-*
