@@ -74,7 +74,16 @@ namespace WallpaperChanger
         public static List<string> Folders = new List<string>();
         public static int IntervalMinutes = 10;   // 1,5,10,30,60,360,720,1440
         public static WallpaperStyle Style = WallpaperStyle.Fill;
-        public static bool RandomOrder = true;
+        // Rotation order: 0 random (shuffled, no repeats), 1 newest modified
+        // first, 2 oldest modified first. Stored as rotate_order=; configs
+        // written before that key existed only carry random= and are mapped
+        // on load. RandomOrder is derived from it so the two cannot drift.
+        public static int RotateOrder = 0;
+
+        public static bool RandomOrder
+        {
+            get { return RotateOrder == 0; }
+        }
         public static bool AutoStart = false;
         public static bool Recursive = true;
         public static int Hotkey = -1;            // -1 none, 0-9 = Ctrl+digit (next wallpaper)
@@ -223,7 +232,20 @@ namespace WallpaperChanger
                     WallpaperStyle s;
                     if (Enum.TryParse<WallpaperStyle>(v, true, out s)) Style = s;
                 }
-                if (single.TryGetValue("random", out v)) RandomOrder = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+                if (single.TryGetValue("rotate_order", out v))
+                {
+                    int n;
+                    if (int.TryParse(v, out n) && n >= 0 && n <= 2) RotateOrder = n;
+                    else RotateOrder = 0;
+                }
+                else if (single.TryGetValue("random", out v))
+                {
+                    // Legacy key. random=0 used to mean "walk by file name",
+                    // which no longer exists; newest-first is the closest
+                    // surviving order, and it is what an old in-order config
+                    // gets after this upgrade.
+                    RotateOrder = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase)) ? 0 : 1;
+                }
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("sort", out v))
@@ -304,7 +326,11 @@ namespace WallpaperChanger
                 sb.AppendLine("theme=" + Theme.ToConfig(ThemeMode));
                 sb.AppendLine("interval_minutes=" + IntervalMinutes);
                 sb.AppendLine("style=" + Style);
+                // random= is still written for builds that only know that key
+                // (a downgrade then reads "not random" instead of "random");
+                // rotate_order= is what this build reads back.
                 sb.AppendLine("random=" + (RandomOrder ? "1" : "0"));
+                sb.AppendLine("rotate_order=" + RotateOrder);
                 sb.AppendLine("auto_start=" + (AutoStart ? "1" : "0"));
                 sb.AppendLine("recursive=" + (Recursive ? "1" : "0"));
                 sb.AppendLine("sort=" + PickerSort);

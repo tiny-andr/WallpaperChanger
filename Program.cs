@@ -176,6 +176,26 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /ordertest
+            // Assert, as data, the sequence the two time-based rotation modes
+            // walk through - the one thing the log can only show after the fact.
+            // Builds a throwaway folder, applies no wallpaper, opens no window.
+            if (args.Length > 0 && args[0].Equals("/ordertest", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunOrderTest());
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /langtest
+            // Builds the window in one language, switches through the other two
+            // the way the language drop-down does, and reads every page header
+            // and card caption back. No window is shown.
+            if (args.Length > 0 && args[0].Equals("/langtest", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunLangTest());
+                return;
+            }
+
             // Diagnostic:  WallpaperChanger.exe /dpiwindow <targetDpi> <pngPath>
             if (args.Length > 0 && args[0].Equals("/dpiwindow", StringComparison.OrdinalIgnoreCase))
             {
@@ -1005,6 +1025,338 @@ namespace WallpaperChanger
             Log.Write("pickertest: pass=" + pass + " fail=" + fail);
             Console.WriteLine("RESULT pickertest pass=" + pass + " fail=" + fail);
             return fail == 0 ? 0 : 1;
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /ordertest
+        //
+        // The rotation order is a sequence, and a sequence is exactly what a
+        // screenshot cannot check. A throwaway folder is built whose
+        // modification times are deliberately in a different order from its file
+        // names: if the pool ever falls back to the path order, or to whatever
+        // order the scanner handed it over in, the expected walk below cannot
+        // come out. Headless - no window, no wallpaper, and the real ini is
+        // never touched (the config is redirected into the same folder).
+        private static int RunOrderTest()
+        {
+            int pass = 0, fail = 0;
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "wc-ordertest-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                System.IO.Directory.CreateDirectory(dir);
+
+                // File names in one order, modification times in another. The
+                // dates run oldest -> newest as: delta, alpha, echo, bravo,
+                // charlie.
+                MakeFile(dir, "delta.jpg", 64, new DateTime(2020, 1, 1));
+                MakeFile(dir, "alpha.jpg", 64, new DateTime(2020, 1, 2));
+                MakeFile(dir, "echo.jpg", 64, new DateTime(2020, 1, 3));
+                MakeFile(dir, "bravo.jpg", 64, new DateTime(2020, 1, 4));
+                MakeFile(dir, "charlie.jpg", 64, new DateTime(2020, 1, 5));
+
+                List<string> pool = new List<string>();
+                foreach (string f in System.IO.Directory.GetFiles(dir)) pool.Add(f);
+                CheckOrder(ref pass, ref fail, "pool holds every file", pool.Count == 5, pool.Count + " files");
+
+                string[] newestFirst = { "charlie.jpg", "bravo.jpg", "echo.jpg", "alpha.jpg", "delta.jpg" };
+                string[] oldestFirst = { "delta.jpg", "alpha.jpg", "echo.jpg", "bravo.jpg", "charlie.jpg" };
+
+                // ---- the pool order each mode produces
+                CheckOrder(ref pass, ref fail, "newest-first orders the pool",
+                    NamesOf(MainForm.SortByModTime(pool, true)) == string.Join(",", newestFirst),
+                    NamesOf(MainForm.SortByModTime(pool, true)));
+                CheckOrder(ref pass, ref fail, "oldest-first orders the pool",
+                    NamesOf(MainForm.SortByModTime(pool, false)) == string.Join(",", oldestFirst),
+                    NamesOf(MainForm.SortByModTime(pool, false)));
+
+                // The order must be a property of the files, not of the order
+                // the scan happened to return them in - otherwise every fresh
+                // scan would reshuffle the rotation.
+                List<string> reversed = new List<string>(pool);
+                reversed.Reverse();
+                CheckOrder(ref pass, ref fail, "pool order ignores the incoming order",
+                    NamesOf(MainForm.SortByModTime(reversed, true)) == string.Join(",", newestFirst),
+                    NamesOf(MainForm.SortByModTime(reversed, true)));
+
+                // ---- the walk the rotation actually performs
+                foreach (bool newest in new bool[] { true, false })
+                {
+                    string label = newest ? "newest-first" : "oldest-first";
+                    string[] want = newest ? newestFirst : oldestFirst;
+                    List<string> ordered = MainForm.SortByModTime(pool, newest);
+
+                    // Nothing applied yet (a restart): start at the front.
+                    string first = MainForm.NextInOrder(ordered, null);
+                    CheckOrder(ref pass, ref fail, label + " starts at the front of the pool",
+                        NameOf(first) == want[0], NameOf(first));
+
+                    // Then visit every entry exactly once, in order.
+                    List<string> visited = new List<string>();
+                    string cur = first;
+                    for (int i = 0; i < ordered.Count; i++)
+                    {
+                        visited.Add(NameOf(cur));
+                        cur = MainForm.NextInOrder(ordered, cur);
+                    }
+                    CheckOrder(ref pass, ref fail, label + " walks the whole pool in order",
+                        string.Join(",", visited.ToArray()) == string.Join(",", want),
+                        string.Join(",", visited.ToArray()));
+
+                    // ... and wraps around instead of stalling on the last one.
+                    CheckOrder(ref pass, ref fail, label + " wraps back to the first",
+                        NameOf(cur) == want[0], NameOf(cur));
+
+                    // A wallpaper that left the pool (unchecked, source turned
+                    // off, deleted) must not stall the rotation: the walk starts
+                    // over at the front instead.
+                    string gone = System.IO.Path.Combine(dir, "gone.jpg");
+                    CheckOrder(ref pass, ref fail, label + " restarts when the current file left the pool",
+                        NameOf(MainForm.NextInOrder(ordered, gone)) == want[0],
+                        NameOf(MainForm.NextInOrder(ordered, gone)));
+                }
+
+                // ---- equal timestamps must not degenerate into random order
+                MakeFile(dir, "tie2.jpg", 64, new DateTime(2021, 6, 1));
+                MakeFile(dir, "tie1.jpg", 64, new DateTime(2021, 6, 1));
+                List<string> ties = new List<string>();
+                ties.Add(System.IO.Path.Combine(dir, "tie2.jpg"));
+                ties.Add(System.IO.Path.Combine(dir, "tie1.jpg"));
+                CheckOrder(ref pass, ref fail, "equal timestamps fall back to the natural order",
+                    NamesOf(MainForm.SortByModTime(ties, true)) == "tie1.jpg,tie2.jpg",
+                    NamesOf(MainForm.SortByModTime(ties, true)));
+
+                // ---- config: the new key, its range, the legacy mapping
+                string cfg = System.IO.Path.Combine(dir, "cfg");
+                System.IO.Directory.CreateDirectory(cfg);
+                AppPaths.DataDirOverride = cfg;
+                foreach (int m in new int[] { 0, 1, 2 })
+                {
+                    Config.RotateOrder = m;
+                    Config.Save();
+                    Config.RotateOrder = -999;
+                    Config.Load();
+                    CheckOrder(ref pass, ref fail, "rotate_order=" + m + " survives a save/load",
+                        Config.RotateOrder == m, "got " + Config.RotateOrder);
+                    CheckOrder(ref pass, ref fail, "rotate_order=" + m + " shows random=" + (m == 0 ? 1 : 0),
+                        Config.RandomOrder == (m == 0), "got " + Config.RandomOrder);
+                }
+                foreach (int i in new int[] { 3, -1, 99 })
+                {
+                    Config.RotateOrder = i;
+                    Config.Save();
+                    Config.RotateOrder = -999;
+                    Config.Load();
+                    CheckOrder(ref pass, ref fail, "rotate_order=" + i + " falls back to 0",
+                        Config.RotateOrder == 0, "got " + Config.RotateOrder);
+                }
+
+                // The upgrade path that matters: an ini written before this key
+                // existed has only random=. random=1 stays random; random=0 (the
+                // old "walk by file name" mode, which is gone) must land on
+                // newest-first rather than silently becoming random.
+                WriteLegacyIni(cfg, "1");
+                Config.RotateOrder = -999;
+                Config.Load();
+                CheckOrder(ref pass, ref fail, "legacy random=1 loads as random",
+                    Config.RotateOrder == 0, "got " + Config.RotateOrder);
+                WriteLegacyIni(cfg, "0");
+                Config.RotateOrder = -999;
+                Config.Load();
+                CheckOrder(ref pass, ref fail, "legacy random=0 loads as newest-first",
+                    Config.RotateOrder == 1, "got " + Config.RotateOrder);
+
+                // Once both keys exist, the new one decides.
+                Config.RotateOrder = 2;
+                Config.Save();
+                Config.RotateOrder = -999;
+                Config.Load();
+                CheckOrder(ref pass, ref fail, "rotate_order= outvotes random=",
+                    Config.RotateOrder == 2, "got " + Config.RotateOrder);
+
+                AppPaths.DataDirOverride = null;
+                Config.RotateOrder = 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("ordertest error: " + ex);
+                fail++;
+            }
+            finally
+            {
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            }
+            Log.Write("ordertest: pass=" + pass + " fail=" + fail);
+            Console.WriteLine("RESULT ordertest pass=" + pass + " fail=" + fail);
+            return fail == 0 ? 0 : 1;
+        }
+
+        // Diagnostic:  WallpaperChanger.exe /langtest
+        //
+        // Builds the real window in one language, then switches to the others
+        // through the same path the language drop-down uses, and reads every
+        // page header and card caption back.
+        //
+        // This is the case /dpiwindow cannot cover: it photographs a window that
+        // was built in a single language, so a header that never re-reads its
+        // text looks perfect in every screenshot and is still wrong the moment
+        // the user switches language - which is exactly how the page titles and
+        // card captions shipped broken while every control around them followed.
+        //
+        // The config is redirected into a throwaway folder (the real ini is
+        // never touched) and no window is shown.
+        private static int RunLangTest()
+        {
+            int pass = 0, fail = 0;
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "wc-langtest-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                System.IO.Directory.CreateDirectory(dir);
+                AppPaths.DataDirOverride = dir;
+                Config.Language = Loc.Zh;
+                Config.Save();
+                Loc.SetLanguage(Loc.Zh);
+
+                MainForm form = new MainForm();
+                try
+                {
+                    // The overview page deliberately carries no header of its
+                    // own, so it is not in this list: pages 1 and 2 are the
+                    // sources and general pages.
+                    string[] pageKeys = { null, "nav.sources", "nav.general" };
+                    string[] noteKeys = { null, "src.page.note", "gen.page.note" };
+                    string[] codes = { Loc.Zh, Loc.En, Loc.Ja };
+                    string prevHeader = null;
+
+                    for (int step = 0; step < codes.Length; step++)
+                    {
+                        string code = codes[step];
+                        if (step > 0) form.Test_SwitchLanguage(code);
+
+                        CheckLang(ref pass, ref fail, code + ": Loc reports the language",
+                            Loc.Language == code, "got " + Loc.Language);
+
+                        for (int p = 1; p < pageKeys.Length; p++)
+                        {
+                            string wantT = Loc.T(pageKeys[p]);
+                            string wantN = Loc.T(noteKeys[p]);
+                            CheckLang(ref pass, ref fail, code + ": page " + p + " header follows",
+                                form.Test_PageTitle(p) == wantT,
+                                "[" + form.Test_PageTitle(p) + "] want [" + wantT + "]");
+                            CheckLang(ref pass, ref fail, code + ": page " + p + " note follows",
+                                form.Test_PageNote(p) == wantN,
+                                "[" + form.Test_PageNote(p) + "] want [" + wantN + "]");
+                        }
+
+                        // "It equals Loc.T(...)" is not enough on its own: a
+                        // string frozen in the build language also satisfies it
+                        // on the first pass. It has to differ from the previous
+                        // language as well.
+                        if (prevHeader != null)
+                        {
+                            CheckLang(ref pass, ref fail,
+                                code + ": the sources header really changed",
+                                form.Test_PageTitle(1) != prevHeader,
+                                "still [" + form.Test_PageTitle(1) + "]");
+                        }
+                        prevHeader = form.Test_PageTitle(1);
+
+                        int cards = form.Test_CardCount;
+                        CheckLang(ref pass, ref fail, code + ": the cards are registered",
+                            cards >= 5, cards + " cards");
+                        int bad = 0;
+                        string badWhat = "";
+                        for (int i = 0; i < cards; i++)
+                        {
+                            string tk = form.Test_CardTitleKey(i);
+                            string nk = form.Test_CardNoteKey(i);
+                            if (tk != null && form.Test_CardTitle(i) != Loc.T(tk))
+                            {
+                                bad++;
+                                badWhat = "card " + i + " title [" + form.Test_CardTitle(i)
+                                    + "] want [" + Loc.T(tk) + "]";
+                            }
+                            if (nk != null && form.Test_CardNote(i) != Loc.T(nk))
+                            {
+                                bad++;
+                                badWhat = "card " + i + " note [" + form.Test_CardNote(i)
+                                    + "] want [" + Loc.T(nk) + "]";
+                            }
+                        }
+                        CheckLang(ref pass, ref fail, code + ": every card caption follows",
+                            bad == 0, bad + " wrong, last: " + badWhat);
+                    }
+                }
+                finally
+                {
+                    form.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("langtest error: " + ex);
+                fail++;
+            }
+            finally
+            {
+                AppPaths.DataDirOverride = null;
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            }
+            Log.Write("langtest: pass=" + pass + " fail=" + fail);
+            Console.WriteLine("RESULT langtest pass=" + pass + " fail=" + fail);
+            return fail == 0 ? 0 : 1;
+        }
+
+        private static void CheckLang(ref int pass, ref int fail, string what, bool ok, string got)
+        {
+            if (ok)
+            {
+                pass++;
+                Log.Write("langtest PASS " + what);
+            }
+            else
+            {
+                fail++;
+                Log.Write("langtest FAIL " + what + " [got: " + got + "]");
+                Console.WriteLine("FAIL " + what + " [got: " + got + "]");
+            }
+        }
+
+        // An ini exactly as a build without rotate_order= wrote it.
+        private static void WriteLegacyIni(string cfgDir, string randomValue)
+        {
+            System.IO.Directory.CreateDirectory(cfgDir);
+            string path = System.IO.Path.Combine(cfgDir, "WallpaperChanger.ini");
+            System.IO.File.WriteAllText(path,
+                "; legacy config, no rotate_order key\nrandom=" + randomValue + "\ninterval_minutes=10\n",
+                new System.Text.UTF8Encoding(false));
+        }
+
+        private static string NameOf(string path)
+        {
+            return path == null ? "<null>" : System.IO.Path.GetFileName(path);
+        }
+
+        private static string NamesOf(List<string> paths)
+        {
+            List<string> names = new List<string>();
+            foreach (string p in paths) names.Add(NameOf(p));
+            return string.Join(",", names.ToArray());
+        }
+
+        private static void CheckOrder(ref int pass, ref int fail, string what, bool ok, string got)
+        {
+            if (ok)
+            {
+                pass++;
+                Log.Write("ordertest PASS " + what);
+            }
+            else
+            {
+                fail++;
+                Log.Write("ordertest FAIL " + what + " [got: " + got + "]");
+                Console.WriteLine("FAIL " + what + " [got: " + got + "]");
+            }
         }
 
         private static void MakeFile(string dir, string name, int size, DateTime modified)

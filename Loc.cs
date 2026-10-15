@@ -265,7 +265,8 @@ namespace WallpaperChanger
             m["ov.strip.adjust"] = "调整 →";
             m["ov.preview.none"] = "未设置壁纸";
             m["ov.order.random"] = "随机";
-            m["ov.order.inorder"] = "顺序";
+            m["ov.order.newest"] = "最新修改优先";
+            m["ov.order.oldest"] = "最旧修改优先";
             m["hist.title"] = "切换历史";
             m["hist.note"] = "本次启动后的浏览轨迹。深色为已看过的，浅色为按「下一张」可恢复的。";
             m["hist.cur"] = "正在显示";
@@ -277,7 +278,7 @@ namespace WallpaperChanger
             m["hist.recent"] = "只显示最近的 {0} 张壁纸";
             m["rot.style.note"] = "缩略图示意图片在屏幕上的铺放方式。";
             m["rot.interval.note"] = "定时到点会重新扫描源目录并挑一张新壁纸。";
-            m["rot.order.note"] = "随机为洗牌后不重复播放，顺序为按文件名依次播放。";
+            m["rot.order.note"] = "随机为洗牌后不重复播放；按修改时间则从最新（或最旧）的一张开始依次切换。";
             m["rot.hotkeys.title"] = "全局快捷键";
             m["rot.hotkeys.note"] = "点击按键框后按下组合键即可重新绑定，主键盘与小键盘均支持。";
             m["rot.hk.note.next"] = "切换后立即生效";
@@ -477,7 +478,8 @@ namespace WallpaperChanger
             m["ov.strip.adjust"] = "Adjust →";
             m["ov.preview.none"] = "No wallpaper set";
             m["ov.order.random"] = "Random";
-            m["ov.order.inorder"] = "In order";
+            m["ov.order.newest"] = "Newest first";
+            m["ov.order.oldest"] = "Oldest first";
             m["hist.title"] = "Switch history";
             m["hist.note"] = "Where you have been this session. Dimmed rows were seen already, brighter rows can be restored with Next.";
             m["hist.cur"] = "Now showing";
@@ -489,7 +491,7 @@ namespace WallpaperChanger
             m["hist.recent"] = "Showing the last {0} wallpapers only";
             m["rot.style.note"] = "The thumbnail shows how the image is laid out on screen.";
             m["rot.interval.note"] = "When the timer fires the sources are rescanned and a new wallpaper is picked.";
-            m["rot.order.note"] = "Random shuffles and plays without repeats; in-order walks by filename.";
+            m["rot.order.note"] = "Random shuffles and plays without repeats; by time it walks from the newest (or oldest) file onward.";
             m["rot.hotkeys.title"] = "Global hotkeys";
             m["rot.hotkeys.note"] = "Click a key box and press a combination to rebind it. Top-row and numpad keys both work.";
             m["rot.hk.note.next"] = "Takes effect immediately";
@@ -689,7 +691,8 @@ namespace WallpaperChanger
             m["ov.strip.adjust"] = "調整 →";
             m["ov.preview.none"] = "壁紙が未設定です";
             m["ov.order.random"] = "ランダム";
-            m["ov.order.inorder"] = "順番";
+            m["ov.order.newest"] = "新しい順";
+            m["ov.order.oldest"] = "古い順";
             m["hist.title"] = "切り替え履歴";
             m["hist.note"] = "今回の起動後の履歴です。暗い行は閲覧済み、明るい行は「次の壁紙」で復元できます。";
             m["hist.cur"] = "表示中";
@@ -701,7 +704,7 @@ namespace WallpaperChanger
             m["hist.recent"] = "直近 {0} 枚の壁紙のみ表示";
             m["rot.style.note"] = "サムネイルは画像の配置方法を示しています。";
             m["rot.interval.note"] = "タイマーが作動するとソースを再スキャンして新しい壁紙を選びます。";
-            m["rot.order.note"] = "ランダムは重複なしで再生し、順番はファイル名順に再生します。";
+            m["rot.order.note"] = "ランダムは重複なしでシャッフル再生、時刻順は新しい（または古い）ファイルから順に切り替えます。";
             m["rot.hotkeys.title"] = "グローバルホットキー";
             m["rot.hotkeys.note"] = "キー欄をクリックしてから組み合わせキーを押すと再割り当てできます。";
             m["rot.hk.note.next"] = "切り替え後すぐに反映されます";

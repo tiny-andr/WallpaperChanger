@@ -25,7 +25,7 @@ The big button at the bottom of the rail shows the rotation state (**Rotating** 
 - **Multi-folder sources, individually switchable** — images from all *enabled* sources are merged into one rotation pool. The Sources page lists every source with its wallpaper count (recursive, subfolders included) and lets you add, remove, or turn a single source off without losing it — a disabled source simply stops contributing and comes back with one tick
 - **6 fit styles** — Fill, Fit, Stretch, Tile, Center, Span (multi-monitor span supported)
 - **8 switch intervals** — 1 / 5 / 10 / 30 minutes, 1 / 6 / 12 / 24 hours. The next switch time is shown in the status bar, with its day attached when the interval crosses midnight ("tomorrow 22:00")
-- **Random or sequential order**
+- **Random or by modification time (newest or oldest first)**
 - **Multi-monitor** — the same wallpaper is applied to all screens
 - **Light / dark theme** — one switch on the General page, remembered immediately; the window and the tray menu follow
 - **Global hotkeys** (main keyboard **and** numpad), rebindable by clicking the key box on the General page:
@@ -45,7 +45,7 @@ Grab the latest installer from the [Releases](../../releases) page (`WallpaperCh
 
 No .NET runtime needed — the app is self-contained.
 
-> Current version: **v2.0.6** (interface rebuilt from scratch)
+> Current version: **v2.0.7**
 
 ## Usage
 

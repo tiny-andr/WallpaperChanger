@@ -364,6 +364,16 @@ namespace WallpaperChanger
             }
         }
 
+        // Page headers and card captions are resolved from Loc once, when the
+        // page is built, and nothing re-reads them afterwards - so switching
+        // the language used to leave every page title, page note and card
+        // caption in the language the window was built in, while the controls
+        // around them changed. The keys are kept here (never the resolved
+        // strings) and replayed by ApplyTexts.
+        private readonly List<string[]> pageTextKeys = new List<string[]>();
+        private readonly List<CardPanel> cardTextRefs = new List<CardPanel>();
+        private readonly List<string[]> cardTextKeys = new List<string[]>();
+
         // A page is a card stack whose header doubles as the page title.
         // Passing no keys gives a page that opens straight into its first
         // card, which is what the overview pane does.
@@ -371,6 +381,7 @@ namespace WallpaperChanger
         {
             PageStack p = new PageStack();
             p.Visible = false;
+            pageTextKeys.Add(new string[] { titleKey, noteKey });
             if (titleKey != null)
             {
                 p.Head.Title = Loc.T(titleKey);
@@ -379,6 +390,19 @@ namespace WallpaperChanger
             content.Controls.Add(p);
             pages.Add(p);
             return p;
+        }
+
+        // A card's caption and note, registered so a language switch reaches
+        // them too. Either key may be null when the card carries no caption,
+        // or when its note is filled in from live data instead (see
+        // RefreshSourceSummary).
+        private CardPanel CardText(CardPanel card, string titleKey, string noteKey)
+        {
+            cardTextRefs.Add(card);
+            cardTextKeys.Add(new string[] { titleKey, noteKey });
+            if (titleKey != null) card.Title = Loc.T(titleKey);
+            if (noteKey != null) card.Note = Loc.T(noteKey);
+            return card;
         }
 
         private void ShowPage(int index)
@@ -475,8 +499,7 @@ namespace WallpaperChanger
             };
 
             BuildStripCombo(out cmbOrder, "ov.strip.order");
-            cmbOrder.Items = new string[] {
-                Loc.T("ov.order.random"), Loc.T("ov.order.inorder") };
+            cmbOrder.Items = OrderNames();
             cmbOrder.SelectedIndexChanged += delegate
             {
                 if (loadingUi) return;
@@ -502,6 +525,18 @@ namespace WallpaperChanger
         private CardPanel stripRow;
         private readonly List<KitLabel> stripKeys = new List<KitLabel>();
         private readonly List<KitDropdown> stripCombos = new List<KitDropdown>();
+
+        // The rotation orders, in dropdown order: index 0 random, 1 newest
+        // modified first, 2 oldest modified first - the same encoding as
+        // Config.RotateOrder. One place, so the dropdown, the language reload
+        // and the config index can never drift apart.
+        private static string[] OrderNames()
+        {
+            return new string[] {
+                Loc.T("ov.order.random"),
+                Loc.T("ov.order.newest"),
+                Loc.T("ov.order.oldest") };
+        }
 
         private void BuildStripCombo(out KitDropdown box, string captionKey)
         {
@@ -547,8 +582,7 @@ namespace WallpaperChanger
             // list reports what it needs and CardPanel.ContentHeight grows the
             // card to match, so adding a source makes the card taller instead
             // of hiding the last row.
-            cardSrc = page.AddCard(80);
-            cardSrc.Title = Loc.T("src.list.title");
+            cardSrc = CardText(page.AddCard(80), "src.list.title", null);
 
             srcList = cardSrc.AddChild(new SourceList(), 0, 0, 684, 120);
             srcList.Changed += delegate { OnSourcesEdited(); };
@@ -589,9 +623,7 @@ namespace WallpaperChanger
         {
             PageStack page = NewPage("nav.general", "gen.page.note");
 
-            CardPanel cardStart = page.AddCard(126);
-            cardStart.Title = Loc.T("gen.startup.title");
-            cardStart.Note = Loc.T("gen.startup.note");
+            CardPanel cardStart = CardText(page.AddCard(126), "gen.startup.title", "gen.startup.note");
 
             swAutoStart = cardStart.AddHeaderControl(new ToggleSwitch(), Theme.SwitchW, Theme.SwitchH);
             swAutoStart.CheckedChanged += delegate
@@ -624,9 +656,7 @@ namespace WallpaperChanger
                 SetThemeMode(want);
             };
 
-            CardPanel cardLang = page.AddCard(84);
-            cardLang.Title = Loc.T("gen.language.title");
-            cardLang.Note = Loc.T("gen.language.note");
+            CardPanel cardLang = CardText(page.AddCard(84), "gen.language.title", "gen.language.note");
 
             cmbLang = cardLang.AddHeaderControl(new KitDropdown(), LangColW, Theme.InputH);
             cmbLang.Items = Loc.LanguageDisplayNames;
@@ -641,9 +671,7 @@ namespace WallpaperChanger
                 ChangeLanguage(Loc.LanguageCodes[i]);
             };
 
-            CardPanel cardHk = page.AddCard(184);
-            cardHk.Title = Loc.T("rot.hotkeys.title");
-            cardHk.Note = Loc.T("rot.hotkeys.note");
+            CardPanel cardHk = CardText(page.AddCard(184), "rot.hotkeys.title", "rot.hotkeys.note");
 
             lblHkNextName = cardHk.AddChild(Txt(LabelStyle.BodyBold), 0, 6, 320, 20);
             lblHkNext = cardHk.AddChild(Txt(LabelStyle.Cap, true), 0, 26, 320, 16);
@@ -679,8 +707,7 @@ namespace WallpaperChanger
                 ApplyHotkey();
             };
 
-            CardPanel cardCfg = page.AddCard(156);
-            cardCfg.Title = Loc.T("gen.config.title");
+            CardPanel cardCfg = CardText(page.AddCard(156), "gen.config.title", null);
 
             btnOpenFolder = cardCfg.AddHeaderControl(new FlatButton(), 160, Theme.BtnSmallH);
             btnOpenFolder.Kind = BtnKind.Secondary;
@@ -720,6 +747,25 @@ namespace WallpaperChanger
             footer.DirtyText = Loc.T("sb.dirty");
             footer.SaveText = Loc.T("main.btn.save");
 
+            // ---- page headers and card captions
+            // These are resolved from Loc once, when the page is built, so
+            // without this replay a language switch left them in the old
+            // language while every control around them changed. Keys, never
+            // resolved strings, are what the registration lists hold.
+            for (int i = 0; i < pages.Count && i < pageTextKeys.Count; i++)
+            {
+                string[] k = pageTextKeys[i];
+                if (k[0] == null) continue;
+                pages[i].Head.Title = Loc.T(k[0]);
+                pages[i].Head.Note = Loc.T(k[1]);
+            }
+            for (int i = 0; i < cardTextRefs.Count; i++)
+            {
+                string[] k = cardTextKeys[i];
+                if (k[0] != null) cardTextRefs[i].Title = Loc.T(k[0]);
+                if (k[1] != null) cardTextRefs[i].Note = Loc.T(k[1]);
+            }
+
             // ---- overview
             nowPreview.Pill = Loc.T("ov.now.showing");
             nowPreview.EmptyText = Loc.T("ov.preview.none");
@@ -750,8 +796,7 @@ namespace WallpaperChanger
             // ---- overview settings row (language may have just changed)
             ReloadComboItems(cmbStyle, Loc.StyleNames());
             ReloadComboItems(cmbInterval, Loc.IntervalNames());
-            ReloadComboItems(cmbOrder, new string[] {
-                Loc.T("ov.order.random"), Loc.T("ov.order.inorder") });
+            ReloadComboItems(cmbOrder, OrderNames());
             RefreshStripCaptions();
             RefreshStrip();
 
@@ -1120,7 +1165,7 @@ namespace WallpaperChanger
             if (ii < 0) ii = 2;
             if (cmbInterval.SelectedIndex != ii) cmbInterval.SelectedIndex = ii;
 
-            int oi = Config.RandomOrder ? 0 : 1;
+            int oi = Math.Min(Math.Max(Config.RotateOrder, 0), 2);
             if (cmbOrder.SelectedIndex != oi) cmbOrder.SelectedIndex = oi;
         }
 
@@ -1360,7 +1405,10 @@ namespace WallpaperChanger
 
             Config.Style = (WallpaperStyle)Math.Max(0, cmbStyle.SelectedIndex);
             Config.IntervalMinutes = IntervalFromIndex(cmbInterval.SelectedIndex);
-            Config.RandomOrder = cmbOrder.SelectedIndex == 0;
+            // The dropdown and Config.RotateOrder share one encoding
+            // (0 random, 1 newest first, 2 oldest first), clamped here so a
+            // never-populated dropdown cannot write a bogus index.
+            Config.RotateOrder = Math.Max(0, Math.Min(2, cmbOrder.SelectedIndex));
             Config.AutoStart = swAutoStart.Checked;
             // Hotkeys are written straight to Config by the key caps on
             // commit, so there is nothing to collect for them here.
@@ -1749,12 +1797,78 @@ namespace WallpaperChanger
             }
             else
             {
-                if (workIndex >= imgs.Count) workIndex = 0;
-                string p = imgs[workIndex];
-                workIndex = (workIndex + 1) % imgs.Count;
+                // Newest / oldest modified first. The order is a property of
+                // the pool, so it is rebuilt on every pick rather than carried
+                // in workIndex: the pool changes whenever the checked set or
+                // the source list does, and a stale index would then jump
+                // around. Resume after whatever is on screen instead, and
+                // start from the first entry when that wallpaper has left the
+                // pool - or on the first pick after a restart.
+                List<string> ordered = SortByModTime(imgs, Config.RotateOrder == 1);
+                string p = NextInOrder(ordered, lastApplied);
                 lastApplied = p;
                 return p;
             }
+        }
+
+        // Pool order for the two time-based modes. Ties (the same timestamp to
+        // the tick, common for a batch of files written at once) fall back to
+        // the natural path order, so the sequence stays deterministic instead
+        // of depending on what List.Sort does with equal keys.
+        //
+        // internal static on purpose: /ordertest drives it with real files, so
+        // the order is assertable headless - no window, no ini, no wallpaper.
+        internal static List<string> SortByModTime(List<string> imgs, bool newestFirst)
+        {
+            Dictionary<string, long> ticks = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+            foreach (string p in imgs)
+            {
+                long t = 0;
+                try
+                {
+                    FileInfo fi = new FileInfo(p);
+                    if (fi.Exists) t = fi.LastWriteTimeUtc.Ticks;
+                }
+                catch
+                {
+                }
+                ticks[p] = t;
+            }
+
+            List<string> ordered = new List<string>(imgs);
+            ordered.Sort(delegate (string a, string b)
+            {
+                long ta, tb;
+                if (!ticks.TryGetValue(a, out ta)) ta = 0;
+                if (!ticks.TryGetValue(b, out tb)) tb = 0;
+                if (ta != tb)
+                {
+                    if (newestFirst) return ta > tb ? -1 : 1;
+                    return ta < tb ? -1 : 1;
+                }
+                return ImageScanner.NaturalCompare(a, b);
+            });
+            return ordered;
+        }
+
+        // The pool entry that follows whatever is on screen; the first entry
+        // when that wallpaper is not in the pool, or on the first pick after a
+        // restart. Walking from lastApplied instead of a stored index is what
+        // keeps the sequence sane when the checked set changes under it.
+        internal static string NextInOrder(List<string> ordered, string lastApplied)
+        {
+            if (ordered == null || ordered.Count == 0) return null;
+            if (lastApplied != null)
+            {
+                for (int i = 0; i < ordered.Count; i++)
+                {
+                    if (string.Equals(ordered[i], lastApplied, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return ordered[(i + 1) % ordered.Count];
+                    }
+                }
+            }
+            return ordered[0];
         }
 
         // When any wallpaper is checked, narrow a fresh scan result down to
@@ -2640,6 +2754,59 @@ namespace WallpaperChanger
                 if (rotateTimer != null) rotateTimer.Dispose();
             }
             base.Dispose(disposing);
+        }
+
+        // ---- test hooks (diagnostics only) ---------------------------------
+        //
+        // A language switch is the one UI behaviour a screenshot cannot check:
+        // the window is built in one language and switched afterwards, while
+        // /dpiwindow only ever photographs a freshly built window - which is
+        // exactly why page headers kept shipping in the wrong language. These
+        // hooks let /langtest drive the real switch path (ChangeLanguage, the
+        // same call the drop-down makes) and read the strings back.
+
+        internal void Test_SwitchLanguage(string lang)
+        {
+            ChangeLanguage(lang);
+        }
+
+        internal int Test_PageCount { get { return pages.Count; } }
+        internal int Test_CardCount { get { return cardTextRefs.Count; } }
+
+        internal string Test_PageTitle(int page)
+        {
+            if (page < 0 || page >= pages.Count) return "<no page>";
+            return pages[page].Head.Title;
+        }
+
+        internal string Test_PageNote(int page)
+        {
+            if (page < 0 || page >= pages.Count) return "<no page>";
+            return pages[page].Head.Note;
+        }
+
+        internal string Test_CardTitleKey(int i)
+        {
+            if (i < 0 || i >= cardTextKeys.Count) return "<no card>";
+            return cardTextKeys[i][0];
+        }
+
+        internal string Test_CardNoteKey(int i)
+        {
+            if (i < 0 || i >= cardTextKeys.Count) return "<no card>";
+            return cardTextKeys[i][1];
+        }
+
+        internal string Test_CardTitle(int i)
+        {
+            if (i < 0 || i >= cardTextRefs.Count) return "<no card>";
+            return cardTextRefs[i].Title;
+        }
+
+        internal string Test_CardNote(int i)
+        {
+            if (i < 0 || i >= cardTextRefs.Count) return "<no card>";
+            return cardTextRefs[i].Note;
         }
     }
 }
