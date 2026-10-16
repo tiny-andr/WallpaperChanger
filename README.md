@@ -41,7 +41,7 @@ The big button at the bottom of the rail shows the rotation state (**Rotating** 
 
 ## Install
 
-Grab the latest installer from the [Releases](../../releases) page (`WallpaperChanger-Setup.exe`, Chinese wizard, works on Windows 10/11 x64). Re-running the installer upgrades in place and keeps your existing config.
+Grab the latest installer from the [Releases](https://github.com/tiny-andr/WallpaperChanger/releases) page (`WallpaperChanger-Setup-<version>.exe`, Chinese wizard, works on Windows 10/11 x64). Re-running the installer upgrades in place and keeps your existing config.
 
 No .NET runtime needed — the app is self-contained.
 

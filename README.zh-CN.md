@@ -39,7 +39,7 @@
 
 ## 下载安装
 
-到 [Releases](../../releases) 页面下载最新安装包（`WallpaperChanger-Setup.exe`，中文安装向导，适用于 Windows 10/11 x64）。重复安装即覆盖升级，已有配置会保留。
+到 [Releases](https://github.com/tiny-andr/WallpaperChanger/releases) 页面下载最新安装包（`WallpaperChanger-Setup-<版本号>.exe`，中文安装向导，适用于 Windows 10/11 x64）。重复安装即覆盖升级，已有配置会保留。
 
 应用为自包含发布，**无需安装 .NET 运行库**。
 
