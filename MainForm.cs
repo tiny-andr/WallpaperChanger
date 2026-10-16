@@ -216,6 +216,10 @@ namespace WallpaperChanger
             noticeTimer.Tick += delegate { ClearNotice(); };
 
             Config.Load();
+            // Resume the time-ordered walk where the last session stopped.
+            // Leaving this null made every restart replay the pool from the
+            // top, which reads as "the order was reset".
+            lastApplied = InitialLastApplied();
             Theme.Set(Config.ThemeMode);
             ApplyTheme();
             Log.Write("config: hotkey=" + Config.Hotkey + ", folders=" + Config.Folders.Count
@@ -252,7 +256,10 @@ namespace WallpaperChanger
             // happens to open the sources page.
             StartSourceCounts(false);
 
-            if (Config.AutoStart) AutoStartHelper.SetAutoStart(true);
+            // Never from a diagnostic run: those read the ini next to the exe,
+            // and acting on it would repoint the user's autostart shortcut at a
+            // test build (see Program.DiagnosticRun).
+            if (Config.AutoStart && !Program.DiagnosticRun) AutoStartHelper.SetAutoStart(true);
 
             // Remember the wallpaper that was up at startup as the oldest
             // "previous" target, so going back can reach it.
@@ -1681,7 +1688,9 @@ namespace WallpaperChanger
 
                 if (picked != null)
                 {
-                    SafeUi(delegate { ApplyOnUiThread(picked, count); });
+                    // Already on a worker thread: the write must not be handed
+                    // back to the UI thread from here.
+                    ApplyOnBackground(picked, count);
                 }
                 else
                 {
@@ -1729,15 +1738,31 @@ namespace WallpaperChanger
             }
         }
 
-        private void ApplyOnUiThread(string path, int total)
+        // The wallpaper write itself runs on a worker thread. Timed on the
+        // reporting machine (/flowtest, 2026-10-17): 3.5-4.8 s per switch, of
+        // which 1.5-2.8 s is the WM_SETTINGCHANGE broadcast and ~2 s is
+        // SystemParametersInfo waiting for the shell to transcode the image.
+        // On the UI thread that froze this window, the tray menu and the whole
+        // desktop for the duration - Windows then reported "not responding",
+        // and closing that dialog killed the app with no trace in the log.
+        private void ApplyOnBackground(string path, int total)
+        {
+            bool ok = false;
+            try { ok = WallpaperEngine.Apply(path, Config.Style); }
+            catch { ok = false; }
+            SafeUi(delegate { FinishApply(path, total, ok); });
+        }
+
+        // Everything that has to touch the UI, once the wallpaper is in place.
+        private void FinishApply(string path, int total, bool ok)
         {
             try
             {
-                bool ok = WallpaperEngine.Apply(path, Config.Style);
                 if (ok)
                 {
                     Log.Write("applied: " + path);
                     PushHistory(path);
+                    RememberApplied(path);
                     lastTotal = total;
                     string n3 = Path.GetFileName(path); int t3 = total;
                     SetStatus(delegate { return Loc.F("status.current", n3, t3) + ModeTag(); });
@@ -1869,6 +1894,28 @@ namespace WallpaperChanger
                 }
             }
             return ordered[0];
+        }
+
+        // What a fresh session should treat as "on screen right now": the
+        // wallpaper the ini says was applied last. Null when there is no
+        // record (first run, or a config written before the key existed), and
+        // the walk then starts at the front of the pool as it always did.
+        internal static string InitialLastApplied()
+        {
+            string p = Config.LastApplied;
+            return string.IsNullOrEmpty(p) ? null : p;
+        }
+
+        // Persist the wallpaper that just landed, so the next session resumes
+        // after it. Written straight away rather than on the footer's save
+        // button: it records where the sequence stopped, and a tray quit or a
+        // kill - neither of which presses that button - must not lose it.
+        private void RememberApplied(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            if (string.Equals(Config.LastApplied, path, StringComparison.OrdinalIgnoreCase)) return;
+            Config.LastApplied = path;
+            Config.Save();
         }
 
         // When any wallpaper is checked, narrow a fresh scan result down to
@@ -2077,6 +2124,7 @@ namespace WallpaperChanger
                                     forward.RemoveRange(forward.Count - drop, drop);
                             }
                             lastApplied = path;
+                            RememberApplied(path);
                             RebuildHistory();
                             SetStatus(delegate { return Loc.F("status.current", name, lastTotal) + ModeTag(); });
                         }
@@ -2768,6 +2816,18 @@ namespace WallpaperChanger
         internal void Test_SwitchLanguage(string lang)
         {
             ChangeLanguage(lang);
+        }
+
+        // /ordertest: which wallpaper this session resumed from. It is filled
+        // by the constructor, so a built window is the only way to observe it -
+        // which is exactly what the restart assertion has to cover.
+        internal string Test_LastApplied { get { return lastApplied; } }
+
+        // /ordertest: the record a successful apply leaves behind, without
+        // actually applying one (that would change the live wallpaper).
+        internal void Test_RememberApplied(string path)
+        {
+            RememberApplied(path);
         }
 
         internal int Test_PageCount { get { return pages.Count; } }

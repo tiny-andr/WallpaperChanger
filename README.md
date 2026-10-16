@@ -45,7 +45,7 @@ Grab the latest installer from the [Releases](https://github.com/tiny-andr/Wallp
 
 No .NET runtime needed — the app is self-contained.
 
-> Current version: **v2.0.7**
+> Current version: **v2.0.10**
 
 ## Usage
 

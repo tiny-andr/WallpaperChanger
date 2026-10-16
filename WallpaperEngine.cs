@@ -422,14 +422,18 @@ namespace WallpaperChanger
         //
         // Sent on the caller's thread here (unlike the old background nudge)
         // because the change has to land before we read the wallpaper back to
-        // check it. A short timeout keeps a hung window from stalling the call.
+        // check it. HWND_BROADCAST walks every top-level window in turn and
+        // waits up to the timeout on EACH one, so the timeout multiplies:
+        // measured 1.5-2.8 s per switch at 1000 ms. 200 ms is far longer than a
+        // healthy window needs for this message, and a hung one is skipped
+        // outright by SMTO_ABORTIFHUNG.
         private static void NotifySettingChange()
         {
             try
             {
                 UIntPtr result;
                 SendMessageTimeout(HWND_BROADCAST, WM_SETTINGCHANGE, UIntPtr.Zero,
-                    "Desktop", SMTO_ABORTIFHUNG, 1000, out result);
+                    "Desktop", SMTO_ABORTIFHUNG, 200, out result);
             }
             catch
             {

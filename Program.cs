@@ -13,6 +13,25 @@ namespace WallpaperChanger
         // to come to the front (it may be sitting in the tray with no window).
         private const string ShowEventName = @"Local\WallpaperChanger_ShowWindow";
 
+        // Set for the slash switches that are not part of the product's own
+        // interface. A diagnostic run builds the real window and reads whatever
+        // ini happens to sit next to the exe, so it must not touch machine-wide
+        // state: on 2026-10-17 /flowtest and /ordertest each repointed the
+        // user's autostart shortcut at the test build, because that ini said
+        // auto_start=1 (see MainForm's SetAutoStart call).
+        internal static bool DiagnosticRun;
+
+        private static bool IsDiagnosticRun(string[] args)
+        {
+            if (args == null || args.Length == 0) return false;
+            string a = args[0];
+            if (a.Equals("/tray", StringComparison.OrdinalIgnoreCase)) return false;
+            if (a.Equals("/minimized", StringComparison.OrdinalIgnoreCase)) return false;
+            if (a.Equals("/apply", StringComparison.OrdinalIgnoreCase)) return false;
+            if (a.Equals("/current", StringComparison.OrdinalIgnoreCase)) return false;
+            return a.StartsWith("/", StringComparison.Ordinal);
+        }
+
         [STAThread]
         public static void Main(string[] args)
         {
@@ -20,8 +39,24 @@ namespace WallpaperChanger
             Application.SetCompatibleTextRenderingDefault(false);
             Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
 
+            // There was no global handler at all: an exception on the UI thread
+            // ended the process and left nothing behind, which is exactly the
+            // "it just closed by itself" report. Record it and keep running - a
+            // tray app is still useful after one switch has gone wrong.
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += delegate (object s, ThreadExceptionEventArgs e)
+            {
+                Log.Write("unhandled ui exception: " + e.Exception);
+            };
+            AppDomain.CurrentDomain.UnhandledException += delegate (object s, UnhandledExceptionEventArgs e)
+            {
+                Log.Write("unhandled exception: "
+                    + (e.ExceptionObject == null ? "<null>" : e.ExceptionObject.ToString()));
+            };
+
             Config.Load();
             Loc.Init();
+            DiagnosticRun = IsDiagnosticRun(args);
 
             // Silent apply mode:  WallpaperChanger.exe /apply [file-or-folder]
             // exit codes: 0 ok, 1 apply failed, 2 bad argument, 3 no images
@@ -1034,8 +1069,10 @@ namespace WallpaperChanger
         // modification times are deliberately in a different order from its file
         // names: if the pool ever falls back to the path order, or to whatever
         // order the scanner handed it over in, the expected walk below cannot
-        // come out. Headless - no window, no wallpaper, and the real ini is
-        // never touched (the config is redirected into the same folder).
+        // come out. Headless - no window is shown and no wallpaper is applied
+        // (the source list is emptied before the window is built, see the
+        // resume block), and the real ini is never touched (the config is
+        // redirected into the same folder).
         private static int RunOrderTest()
         {
             int pass = 0, fail = 0;
@@ -1085,7 +1122,8 @@ namespace WallpaperChanger
                     string[] want = newest ? newestFirst : oldestFirst;
                     List<string> ordered = MainForm.SortByModTime(pool, newest);
 
-                    // Nothing applied yet (a restart): start at the front.
+                    // Nothing applied yet (first run, or a config with no
+                    // last_applied=): start at the front.
                     string first = MainForm.NextInOrder(ordered, null);
                     CheckOrder(ref pass, ref fail, label + " starts at the front of the pool",
                         NameOf(first) == want[0], NameOf(first));
@@ -1173,8 +1211,64 @@ namespace WallpaperChanger
                 CheckOrder(ref pass, ref fail, "rotate_order= outvotes random=",
                     Config.RotateOrder == 2, "got " + Config.RotateOrder);
 
+                // ---- a restart must not send the walk back to the top
+                //
+                // Where the sequence stopped is written as last_applied=, and
+                // the next session resumes after that entry. This part needs a
+                // real window: the field it feeds is filled in the
+                // constructor, so asserting the helper alone would still pass
+                // with the constructor line deleted - the "the experiment did
+                // not test the fix" trap. The source list is emptied before the
+                // window is built because the constructor rotates the desktop
+                // when it has sources and the current wallpaper is not one.
+                Config.Folders = new List<string>();
+                Config.RotateOrder = 1;
+                Config.LastApplied = System.IO.Path.Combine(dir, "bravo.jpg");
+                Config.Save();
+                Config.LastApplied = "";   // forget it: only the ini can bring it back
+                Config.Load();
+                CheckOrder(ref pass, ref fail, "last_applied= survives a save/load",
+                    NameOf(Config.LastApplied) == "bravo.jpg", NameOf(Config.LastApplied));
+
+                MainForm form = new MainForm();
+                try
+                {
+                    CheckOrder(ref pass, ref fail, "a restarted session remembers what was on screen",
+                        NameOf(form.Test_LastApplied) == "bravo.jpg",
+                        NameOf(form.Test_LastApplied));
+
+                    List<string> walking = MainForm.SortByModTime(pool, true);
+                    CheckOrder(ref pass, ref fail, "the first pick after a restart continues the walk",
+                        NameOf(MainForm.NextInOrder(walking, form.Test_LastApplied)) == "echo.jpg",
+                        NameOf(MainForm.NextInOrder(walking, form.Test_LastApplied)));
+
+                    // The writing half of the round trip, driven directly
+                    // because a real apply would change the desktop wallpaper.
+                    string echo = System.IO.Path.Combine(dir, "echo.jpg");
+                    form.Test_RememberApplied(echo);
+                    string iniText = System.IO.File.ReadAllText(
+                        System.IO.Path.Combine(cfg, "WallpaperChanger.ini"));
+                    CheckOrder(ref pass, ref fail, "a landed wallpaper is recorded in the ini",
+                        iniText.IndexOf("last_applied=" + echo, StringComparison.OrdinalIgnoreCase) >= 0,
+                        "no last_applied=" + echo + " in the ini");
+                }
+                finally
+                {
+                    form.Dispose();
+                }
+
+                // No key at all (every config written until now) keeps the old
+                // behaviour: no record, start at the front.
+                Config.LastApplied = "";
+                Config.Save();
+                Config.Load();
+                CheckOrder(ref pass, ref fail, "a config without the key resumes nowhere",
+                    NameOf(MainForm.InitialLastApplied()) == "<null>",
+                    NameOf(MainForm.InitialLastApplied()));
+
                 AppPaths.DataDirOverride = null;
                 Config.RotateOrder = 0;
+                Config.LastApplied = "";
             }
             catch (Exception ex)
             {
@@ -1213,6 +1307,11 @@ namespace WallpaperChanger
             {
                 System.IO.Directory.CreateDirectory(dir);
                 AppPaths.DataDirOverride = dir;
+                // The window constructor rotates the desktop when the source
+                // list is non-empty and the current wallpaper is not from it,
+                // and Config still carries the folders loaded at startup.
+                // Building a window must never touch the live wallpaper.
+                Config.Folders = new List<string>();
                 Config.Language = Loc.Zh;
                 Config.Save();
                 Loc.SetLanguage(Loc.Zh);

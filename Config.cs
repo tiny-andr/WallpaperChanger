@@ -119,6 +119,14 @@ namespace WallpaperChanger
         // on, unchecking all of them turns it off.
         public static List<string> ManualPicked = new List<string>();
 
+        // The wallpaper the last successful apply put on screen, so the next
+        // session resumes the time-ordered walk after it instead of starting
+        // over at the top of the pool. Runtime state, not a setting: it is
+        // written the moment a wallpaper lands (MainForm.RememberApplied),
+        // never from the footer save button. Empty = nothing applied yet,
+        // which is also how a config written before this key existed reads.
+        public static string LastApplied = "";
+
         // Wallpaper sources the user temporarily turned off in the source
         // manager. A disabled source is skipped by every scan, so its images
         // never enter rotation, but it keeps its slot in Folders and its
@@ -246,6 +254,10 @@ namespace WallpaperChanger
                     // gets after this upgrade.
                     RotateOrder = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase)) ? 0 : 1;
                 }
+
+                // Where the last session stopped switching. A missing or blank
+                // value means "no record", and the walk starts at the front.
+                if (single.TryGetValue("last_applied", out v)) LastApplied = v.Trim();
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("sort", out v))
@@ -331,6 +343,8 @@ namespace WallpaperChanger
                 // rotate_order= is what this build reads back.
                 sb.AppendLine("random=" + (RandomOrder ? "1" : "0"));
                 sb.AppendLine("rotate_order=" + RotateOrder);
+                // Where rotation stopped, so the next session resumes there.
+                if (LastApplied.Length > 0) sb.AppendLine("last_applied=" + LastApplied);
                 sb.AppendLine("auto_start=" + (AutoStart ? "1" : "0"));
                 sb.AppendLine("recursive=" + (Recursive ? "1" : "0"));
                 sb.AppendLine("sort=" + PickerSort);
