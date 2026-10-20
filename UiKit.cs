@@ -438,7 +438,7 @@ namespace WallpaperChanger
         {
             get
             {
-                int availW = Width - PadXPx * 2;
+                int availW = Width - PadXPx * 2 - Gfx.S(this, HeaderReservedWidth);
                 if (note.Length == 0 || availW <= 0) return 0;
                 int lineH = Gfx.S(this, 18);
                 Font f = Theme.UiFont(Theme.FsCardNote, FontStyle.Regular, DeviceDpi);
@@ -498,12 +498,14 @@ namespace WallpaperChanger
             return c;
         }
 
-        // A control pinned to the top-right of the card header, e.g. the
-        // "add folder" button or an "adjust" link.
+        // Controls pinned to the top-right of the card header. More than one
+        // is allowed and they are laid out right to left in the order they
+        // were added, so the first one added ends up rightmost - the source
+        // card puts "enable all / disable all / recount" up there as one row.
         public T AddHeaderControl<T>(T c, int w, int h) where T : Control
         {
-            HeaderAction = c;
-            headerPlacement = new Placement(c, 0, 0, w, h);
+            headerPlacements.Add(new Placement(c, 0, 0, w, h));
+            headerAction = c;
             Controls.Add(c);
             ApplyPlacements();
             return c;
@@ -521,7 +523,7 @@ namespace WallpaperChanger
         }
 
         private readonly List<Placement> placements = new List<Placement>();
-        private Placement headerPlacement;
+        private readonly List<Placement> headerPlacements = new List<Placement>();
         private Control headerAction;
 
         public Control HeaderAction
@@ -529,6 +531,11 @@ namespace WallpaperChanger
             get { return headerAction; }
             set { headerAction = value; ApplyPlacements(); }
         }
+
+        // Design-pixel width the header controls occupy on the right. The note
+        // under the title is measured against the space that is left, so a long
+        // note wraps instead of running under the buttons. 0 = no reservation.
+        public int HeaderReservedWidth;
 
         public void ApplyPlacements()
         {
@@ -603,18 +610,28 @@ namespace WallpaperChanger
 
                 p.C.SetBounds(x, b.Y + Gfx.S(this, p.Y), w, h);
             }
-            if (headerPlacement.C != null)
+            if (headerPlacements.Count > 0)
             {
                 int p = PadPx;
-                int w = Gfx.S(this, headerPlacement.W);
-                int h = Gfx.S(this, headerPlacement.H);
-                // Put the control's centre on the caption's centre. Measured on
-                // a live window: the title's 18px line box starts at the body
-                // top, so its ink centres on PadTop + TitleH/2. Centring on
-                // part of the line box left the control level with the TOP of
-                // its own caption ("应该下来一点儿").
-                int y = Math.Max(0, p + (Gfx.S(this, TitleH) - h) / 2 + Gfx.S(this, TitleNudge));
-                headerPlacement.C.SetBounds(Math.Max(p, Width - p - w), y, w, h);
+                // Right to left, so the first added control sits rightmost.
+                int right = Width - p;
+                int headerGap = Gfx.S(this, 12);
+                for (int i = 0; i < headerPlacements.Count; i++)
+                {
+                    Placement hp = headerPlacements[i];
+                    if (hp.C == null) continue;
+                    int w = Gfx.S(this, hp.W);
+                    int h = Gfx.S(this, hp.H);
+                    // Put the control's centre on the caption's centre. Measured
+                    // on a live window: the title's 18px line box starts at the
+                    // body top, so its ink centres on PadTop + TitleH/2.
+                    // Centring on part of the line box left the control level
+                    // with the TOP of its own caption ("应该下来一点儿").
+                    int y = Math.Max(0, p + (Gfx.S(this, TitleH) - h) / 2 + Gfx.S(this, TitleNudge));
+                    right -= w;
+                    hp.C.SetBounds(Math.Max(p, right), y, w, h);
+                    right -= headerGap;
+                }
             }
 
             // Placements give every child a fixed box. A few rows in the design
@@ -704,15 +721,18 @@ namespace WallpaperChanger
             if (HasHeader)
             {
                 int y = p;
+                // Header controls live on the first line, so title and note
+                // stop before them instead of running underneath.
+                int textW = Math.Max(0, Width - p * 2 - Gfx.S(this, HeaderReservedWidth));
                 Gfx.Text(g, title, Theme.UiFont(Theme.FsCardTitle, Theme.WeightSemiBold, DeviceDpi),
                     Theme.Fore,
-                    new Rectangle(p, y, Width - p * 2, Gfx.S(this, 22)),
+                    new Rectangle(p, y, textW, Gfx.S(this, 22)),
                     Gfx.Ellipsis(Gfx.LeftMid));
                 y += Gfx.S(this, 22);
                 if (note.Length > 0)
                 {
                     Gfx.Text(g, note, Theme.UiFont(this, Theme.FsCardNote), Theme.ForeMuted,
-                        new Rectangle(p, y, Width - p * 2, NotePx), Gfx.LeftTop);
+                        new Rectangle(p, y, textW, NotePx), Gfx.LeftTop);
                 }
             }
             base.OnPaint(e);
@@ -2370,6 +2390,17 @@ namespace WallpaperChanger
         public void ScrollTo(int y)
         {
             scrollY = Math.Max(0, Math.Min(maxScroll, y));
+            Relayout();
+        }
+
+        // Re-run the whole stack against the live DPI. A DPI change resizes
+        // this panel (and therefore its cards) while the message that carried
+        // the change is still being dispatched, so every card's OnResize
+        // reapplied its placements with the OLD DeviceDpi; the fixed widths
+        // were then frozen at the old scale while the fonts had already grown.
+        // MainForm calls this once more after the window has settled.
+        public void RefreshLayout()
+        {
             Relayout();
         }
 

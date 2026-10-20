@@ -231,13 +231,18 @@ namespace WallpaperChanger
                 return;
             }
 
-            // Diagnostic:  WallpaperChanger.exe /dpiwindow <targetDpi> <pngPath>
+            // Diagnostic:  WallpaperChanger.exe /dpiwindow <targetDpi> <pngPath> [page]
             if (args.Length > 0 && args[0].Equals("/dpiwindow", StringComparison.OrdinalIgnoreCase))
             {
                 int want = 144;
                 if (args.Length > 1) int.TryParse(args[1], out want);
                 string png = args.Length > 2 ? args[2] : "dpiwindow.png";
-                Environment.Exit(RunDpiWindow(want, png));
+                // Optional page index: the window opens on Overview, and the
+                // other pages are only laid out when they are shown, so a
+                // screenshot of page 1 or 2 has to switch to it first.
+                int page = -1;
+                if (args.Length > 3) int.TryParse(args[3], out page);
+                Environment.Exit(RunDpiWindow(want, png, page));
                 return;
             }
 
@@ -1517,7 +1522,7 @@ namespace WallpaperChanger
         // look at a 150% window from a process that is not itself on that
         // monitor: the coordinate spaces of a caller sitting on a 100% screen do
         // not describe the 4K window at all.
-        private static int RunDpiWindow(int targetDpi, string pngPath)
+        private static int RunDpiWindow(int targetDpi, string pngPath, int pageIndex)
         {
             try
             {
@@ -1532,6 +1537,21 @@ namespace WallpaperChanger
                 form.Location = new System.Drawing.Point(target.Bounds.X + 60, target.Bounds.Y + 60);
                 form.Show();
                 Pump(2000);
+
+                // Optional page switch (0 overview / 1 sources / 2 general).
+                // ShowPage is private - it is the rail's own path, and calling
+                // it is what makes the page lay itself out at the live DPI.
+                if (pageIndex >= 0)
+                {
+                    System.Reflection.MethodInfo m = typeof(MainForm).GetMethod("ShowPage",
+                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                    if (m != null)
+                    {
+                        m.Invoke(form, new object[] { pageIndex });
+                        Pump(500);
+                        Log.Write("dpiwindow: page=" + pageIndex);
+                    }
+                }
 
                 Log.Write("dpiwindow: " + target.DeviceName + " formDpi=" + form.DeviceDpi
                     + " size=" + form.Width + "x" + form.Height

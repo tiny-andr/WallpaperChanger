@@ -417,6 +417,14 @@ namespace WallpaperChanger
             if (index < 0 || index >= pages.Count) return;
             for (int i = 0; i < pages.Count; i++) pages[i].Visible = i == index;
             if (rail.SelectedIndex != index) rail.SelectedIndex = index;
+            // Lay the page out now that it is actually visible. A card's
+            // ContentHeight skips children whose Control.Visible is false, and
+            // a hidden page reports false for all of them - so any pass that
+            // ran while this page was hidden (the deferred DPI pass in
+            // SyncToCurrentDpi, or the construction-time one) left its cards
+            // collapsed to their design height. The source list card came back
+            // as a 80px strip with the list cut out of it.
+            pages[index].RefreshLayout();
         }
 
         private static KitLabel Txt(LabelStyle style)
@@ -439,24 +447,38 @@ namespace WallpaperChanger
             PageStack page = NewPage(null, null);
 
             // "正在显示": preview on the left, facts and actions on the right.
-            // The card is as tall as the 210px preview box needs, and the right
-            // column's rows are laid out to sit inside that same 210px.
-            // Sizing the card to the right column instead clipped the preview.
+            // The card body is 648px wide (684 minus the 18px padding on both
+            // sides), so the right column has to END at 648: the old rx=396 +
+            // rw=288 ran 36px past the card and the third fact label was
+            // ellipsised in every language ("Manual..." at 109px in a 92px
+            // slot). The preview gives up 34px of width here - it stays 16:9 at
+            // 340x191 and is vertically centred in the 210px body - and the
+            // three fact columns are sized to their own labels rather than
+            // split evenly: 74 (In rotation, 62px), 94 (Images scanned, 91px)
+            // and 124, because the mode value is prose, not a count.
             CardPanel hero = page.AddCard(Theme.CardPad * 2 + 210);
-            nowPreview = hero.AddChild(new PreviewBox(), 0, 0, 374, 210);
+            nowPreview = hero.AddChild(new PreviewBox(), 0, 9, 340, 191);
             nowPreview.EmptyText = Loc.T("ov.preview.none");
 
-            const int rx = 396, rw = 288;
+            const int rx = 356, rw = 292;
             // The wallpaper's own name and path are deliberately NOT shown:
             // the preview beside them answers "what is showing", and a file
             // name and its full path belong in Explorer, not on this card. The
             // hint line that used to sit under the buttons went with them.
             string[] factKeys = { "ov.fact.pool", "ov.fact.total", "ov.fact.mode" };
+            int[] factX = { 0, 74, 168 };
+            int[] factW = { 74, 94, 124 };
             for (int i = 0; i < 3; i++)
             {
-                factVal[i] = hero.AddChild(Txt(LabelStyle.StatNum), rx + i * 96, 58, 92, 22);
+                // The mode is a word ("Manual pick" / "手动选择" /
+                // "すべてのソース"), not a number, so it is set in the 13px
+                // semibold body face rather than the 16px stat face: 78 / 72 /
+                // 120px instead of 109 / 78 / 129, which is what lets all three
+                // languages fit the 124px column.
+                LabelStyle vStyle = i == 2 ? LabelStyle.BodyBold : LabelStyle.StatNum;
+                factVal[i] = hero.AddChild(Txt(vStyle), rx + factX[i], 58, factW[i], 22);
                 factVal[i].Text = "0";
-                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + i * 96, 80, 92, 16);
+                factLab[i] = hero.AddChild(Txt(LabelStyle.Cap, true), rx + factX[i], 80, factW[i], 16);
                 factLab[i].Text = Loc.T(factKeys[i]);
             }
 
@@ -594,8 +616,32 @@ namespace WallpaperChanger
             srcList = cardSrc.AddChild(new SourceList(), 0, 0, 684, 120);
             srcList.Changed += delegate { OnSourcesEdited(); };
 
-            // Everything that is not the list: what the counts mean and the
-            // bulk actions.
+            // Bulk actions act on the list, so they live in the list card's
+            // header - right-aligned next to the title - instead of on the note
+            // card underneath it. AddHeaderControl lays them out right to left,
+            // so they are added rightmost first.
+            btnRecount = cardSrc.AddHeaderControl(new FlatButton(), 128, Theme.BtnSmallH);
+            btnRecount.Kind = BtnKind.Ghost;
+            btnRecount.Compact = true;
+            btnRecount.Icon = IconKind.Rotate;
+            btnRecount.Click += delegate { StartSourceCounts(true); };
+
+            btnAllOff = cardSrc.AddHeaderControl(new FlatButton(), 120, Theme.BtnSmallH);
+            btnAllOff.Kind = BtnKind.Ghost;
+            btnAllOff.Compact = true;
+            btnAllOff.Click += delegate { srcList.SetAll(false); OnSourcesEdited(); };
+
+            btnAllOn = cardSrc.AddHeaderControl(new FlatButton(), 120, Theme.BtnSmallH);
+            btnAllOn.Kind = BtnKind.Ghost;
+            btnAllOn.Compact = true;
+            btnAllOn.Click += delegate { srcList.SetAll(true); OnSourcesEdited(); };
+
+            // 120 + 120 + 128 + two 12px gaps + 12px of air before the title.
+            cardSrc.HeaderReservedWidth = 404;
+
+            // What the counts mean, plus the way into the manual picker. The
+            // bulk buttons that used to share this row moved into the card
+            // above.
             CardPanel acts = page.AddCard(120);
             lblSrcListNote = acts.AddChild(Txt(LabelStyle.CardNote, true), 0, 0, 684, 36);
             lblSrcListNote.Wrap = true;
@@ -606,22 +652,6 @@ namespace WallpaperChanger
             btnManualPick.Kind = BtnKind.Secondary;
             btnManualPick.Icon = IconKind.Grid;
             btnManualPick.Click += delegate { OpenManualPicker(); };
-
-            btnAllOn = acts.AddChild(new FlatButton(), 300, 62, 120, Theme.BtnSmallH);
-            btnAllOn.Kind = BtnKind.Ghost;
-            btnAllOn.Compact = true;
-            btnAllOn.Click += delegate { srcList.SetAll(true); OnSourcesEdited(); };
-
-            btnAllOff = acts.AddChild(new FlatButton(), 428, 62, 120, Theme.BtnSmallH);
-            btnAllOff.Kind = BtnKind.Ghost;
-            btnAllOff.Compact = true;
-            btnAllOff.Click += delegate { srcList.SetAll(false); OnSourcesEdited(); };
-
-            btnRecount = acts.AddChild(new FlatButton(), 556, 62, 128, Theme.BtnSmallH);
-            btnRecount.Kind = BtnKind.Ghost;
-            btnRecount.Compact = true;
-            btnRecount.Icon = IconKind.Rotate;
-            btnRecount.Click += delegate { StartSourceCounts(true); };
         }
 
         // ---- general -------------------------------------------------------
@@ -2467,6 +2497,30 @@ namespace WallpaperChanger
             LayoutChrome();
             if (bar != null) bar.SyncWindowState(WindowState);
             Invalidate(true);
+
+            // The cards laid themselves out while WM_DPICHANGED was still being
+            // dispatched, when a child control could still report the previous
+            // DeviceDpi: their fixed placements were scaled by the old factor
+            // while the fonts had already been rebuilt for the new one, which
+            // clipped labels on the 150% monitor. Run the sizing once more after
+            // the window has settled. Deferred on purpose - a synchronous pass
+            // still reads the stale DPI.
+            if (!IsHandleCreated) return;
+            BeginInvoke(new Action(delegate
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                // Only the page on screen. Laying out a hidden page collapses
+                // its cards: ContentHeight skips children whose Control.Visible
+                // is false, and a hidden page makes every child report false, so
+                // the source list card shrank back to its 80px design height with
+                // the list cut out. Each page gets its pass from ShowPage once it
+                // becomes visible instead.
+                for (int i = 0; i < pages.Count; i++)
+                {
+                    if (pages[i].Visible) pages[i].RefreshLayout();
+                }
+                LayoutChrome();
+            }));
         }
 
         private static string UiFontFamily

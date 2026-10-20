@@ -671,7 +671,10 @@ namespace WallpaperChanger
             m["ov.next"] = "次の壁紙";
             m["ov.prev"] = "前へ";
             m["ov.path"] = "ファイルパス";
-            m["ov.fact.pool"] = "ローテーション対象";
+            // "ローテーション対象" measured 124px in the 74px fact column of the
+            // overview card (which is sized to the widest of the three
+            // languages). "対象枚数" says the same thing in 59px.
+            m["ov.fact.pool"] = "対象枚数";
             m["ov.fact.total"] = "読み込み画像";
             m["ov.fact.mode"] = "切り替えモード";
             m["ov.mode.manual"] = "手動選択";

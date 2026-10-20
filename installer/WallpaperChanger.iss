@@ -2,7 +2,7 @@
 ; Build:  "C:\Users\Administrator\InnoSetup6\ISCC.exe" WallpaperChanger.iss
 
 #define MyAppName "WallpaperChanger"
-#define MyAppVersion "2.0.10"
+#define MyAppVersion "2.0.11"
 #define MyAppExe "WallpaperChanger.exe"
 
 [Setup]
