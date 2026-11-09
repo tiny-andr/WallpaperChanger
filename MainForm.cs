@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -61,6 +63,32 @@ namespace WallpaperChanger
         private KitLabel lblCfgPath;
         private KitLabel lblAbout;
         private FlatButton btnOpenFolder;
+
+        // ---- general page: software update ---------------------------------
+        // The card is a small state machine: idle -> checking -> up to date /
+        // available -> downloading -> launching. Nothing is installed without
+        // the user pressing the update button; the startup check only reads the
+        // public release feed.
+        private enum UpdateState { Idle, Checking, UpToDate, Available, Downloading, Launching, Failed }
+
+        private CardPanel cardUpdate;
+        private KitLabel lblUpdateCurrent;
+        private KitLabel lblUpdateStatus;
+        private KitLabel lblUpdateAuto;
+        private FlatButton btnUpdateCheck;
+        private FlatButton btnUpdatePrimary;
+        private FlatButton btnUpdateLink;
+        private ToggleSwitch swUpdateCheck;
+        private ProgressBar barUpdate;
+        private UpdateInfo pendingUpdate;
+        private CancellationTokenSource updateCts;
+        private UpdateState updateState = UpdateState.Idle;
+        private string updateError = "";
+        private long updateDone;
+        private long updateTotal;
+        private int updatePercent;
+        private int installedCopy = -1;   // -1 unknown, 0 portable, 1 installed
+        private bool testForceInstalled;  // /updatewindow only
 
         private NotifyIcon notifyIcon;
         private ContextMenuStrip trayMenu;
@@ -286,6 +314,11 @@ namespace WallpaperChanger
                 NextWallpaper();
             }
             RestartTimer();
+
+            // The startup update check only reads the public release API and
+            // waits a few seconds so it never competes with the first wallpaper
+            // apply. Diagnostics are excluded: they must not touch the network.
+            if (Config.CheckUpdates && !Program.DiagnosticRun) StartUpdateAutoCheck();
         }
 
         private void BuildUi()
@@ -754,6 +787,400 @@ namespace WallpaperChanger
             lblCfgPath = cardCfg.AddChild(Txt(LabelStyle.MonoSm, true), 0, 4, 684, 18);
             cardCfg.AddChild(new Rule(), 0, 44, 684, 1);
             lblAbout = cardCfg.AddChild(Txt(LabelStyle.CardNote, true), 0, 58, 684, 18);
+
+            BuildUpdateCard(page);
+        }
+
+        // "Software update": one card that owns the whole check/download/
+        // install flow. It lives on the General page next to the other
+        // application-level switches, not in a separate dialog - a modal
+        // window for this would be a second self-painted dialog to maintain.
+        //
+        // Layout (design coordinates inside the 684px card body):
+        //   row 0   current version (left)  +  "check at startup" + switch (right)
+        //   rule
+        //   status line (2 lines of wrap: the download percentage lives here)
+        //   progress bar (visible while downloading only)
+        //   action buttons (visible per state)
+        private void BuildUpdateCard(PageStack page)
+        {
+            cardUpdate = CardText(page.AddCard(216), "update.title", "update.note");
+
+            btnUpdateCheck = cardUpdate.AddHeaderControl(new FlatButton(), 120, Theme.BtnSmallH);
+            btnUpdateCheck.Kind = BtnKind.Ghost;
+            btnUpdateCheck.Compact = true;
+            btnUpdateCheck.Icon = IconKind.Rotate;
+            btnUpdateCheck.Click += delegate { StartUpdateCheck(true); };
+            // The note must wrap before it reaches the Check button. Without
+            // this the Japanese note ran underneath it and was clipped.
+            cardUpdate.HeaderReservedWidth = 136;
+
+            lblUpdateCurrent = cardUpdate.AddChild(Txt(LabelStyle.Sub), 0, 1, 360, 20);
+            lblUpdateAuto = cardUpdate.AddChild(Txt(LabelStyle.Cap, true), 446, 1, 190, 20);
+            lblUpdateAuto.Align = ContentAlignment.MiddleRight;
+            swUpdateCheck = cardUpdate.AddRightChild(new ToggleSwitch(), 0, Theme.SwitchW, Theme.SwitchH);
+            swUpdateCheck.CheckedChanged += delegate
+            {
+                if (loadingUi) return;
+                ApplyFromUi();
+                dirty = true;
+                RefreshDirty();
+            };
+
+            cardUpdate.AddChild(new Rule(), 0, 30, 684, 1);
+
+            lblUpdateStatus = cardUpdate.AddChild(Txt(LabelStyle.Sub, true), 0, 40, 684, 36);
+            lblUpdateStatus.Wrap = true;
+
+            barUpdate = cardUpdate.AddChild(new ProgressBar(), 0, 82, 684, 6);
+            barUpdate.Visible = false;
+
+            btnUpdatePrimary = cardUpdate.AddChild(new FlatButton(), 0, 96, 150, Theme.BtnH);
+            btnUpdatePrimary.Kind = BtnKind.Primary;
+            btnUpdatePrimary.Click += delegate { OnUpdatePrimary(); };
+            btnUpdatePrimary.Visible = false;
+
+            btnUpdateLink = cardUpdate.AddChild(new FlatButton(), 160, 96, 160, Theme.BtnH);
+            btnUpdateLink.Kind = BtnKind.Secondary;
+            btnUpdateLink.Click += delegate { OpenReleasesPage(); };
+            btnUpdateLink.Visible = false;
+        }
+
+        // ---- update flow ---------------------------------------------------
+
+        private bool UpdateBusy
+        {
+            get
+            {
+                return updateState == UpdateState.Checking ||
+                       updateState == UpdateState.Downloading ||
+                       updateState == UpdateState.Launching;
+            }
+        }
+
+        private bool InstalledCopy
+        {
+            get
+            {
+                if (installedCopy < 0) installedCopy = Updater.IsInstalledCopy() ? 1 : 0;
+                return installedCopy == 1;
+            }
+        }
+
+        // The installer path is only offered when all of these hold: the
+        // release publishes an installer, it publishes a SHA256 digest to verify
+        // it, and this exe was installed by WallpaperChanger.iss. A portable
+        // copy is sent to the download page instead - running the installer
+        // would relocate it to Program Files, which is not an "update".
+        private bool CanAutoInstall()
+        {
+            if (pendingUpdate == null) return false;
+            if (string.IsNullOrEmpty(pendingUpdate.AssetUrl)) return false;
+            if (Updater.DigestHex(pendingUpdate.Digest).Length != 64) return false;
+            return (testForceInstalled || InstalledCopy);
+        }
+
+        private void RenderUpdateCard()
+        {
+            if (cardUpdate == null || lblUpdateStatus == null) return;
+            string current = Application.ProductVersion;
+
+            bool busy = UpdateBusy;
+            btnUpdateCheck.Enabled = !busy;
+            btnUpdateCheck.Text = Loc.T("update.check");
+            lblUpdateCurrent.Text = Loc.F("update.current", current);
+            lblUpdateAuto.Text = Loc.T("update.auto");
+            btnUpdatePrimary.Visible = false;
+            btnUpdateLink.Visible = false;
+            barUpdate.Visible = false;
+
+            switch (updateState)
+            {
+                case UpdateState.Idle:
+                    lblUpdateStatus.Text = Loc.F("update.status.idle", current);
+                    break;
+                case UpdateState.Checking:
+                    lblUpdateStatus.Text = Loc.F("update.status.checking", current);
+                    break;
+                case UpdateState.UpToDate:
+                    lblUpdateStatus.Text = Loc.F("update.status.uptodate", current);
+                    break;
+                case UpdateState.Available:
+                    if (pendingUpdate != null && !InstalledCopy && !testForceInstalled)
+                    {
+                        lblUpdateStatus.Text = Loc.F("update.status.available.portable",
+                            pendingUpdate.Version, current);
+                    }
+                    else
+                    {
+                        lblUpdateStatus.Text = Loc.F("update.status.available",
+                            pendingUpdate != null ? pendingUpdate.Version : "?", current);
+                    }
+                    if (CanAutoInstall())
+                    {
+                        btnUpdatePrimary.Text = Loc.T("update.install");
+                        btnUpdatePrimary.Kind = BtnKind.Primary;
+                        btnUpdatePrimary.Visible = true;
+                        btnUpdateLink.Text = Loc.T("update.openpage");
+                        btnUpdateLink.Visible = true;
+                    }
+                    else
+                    {
+                        btnUpdatePrimary.Text = Loc.T("update.openpage");
+                        btnUpdatePrimary.Kind = BtnKind.Primary;
+                        btnUpdatePrimary.Visible = true;
+                    }
+                    break;
+                case UpdateState.Downloading:
+                    lblUpdateStatus.Text = updateTotal > 0
+                        ? Loc.F("update.status.downloading", updatePercent,
+                            MbText(updateDone), MbText(updateTotal))
+                        : Loc.F("update.status.downloading.nolen", updatePercent,
+                            MbText(updateDone));
+                    barUpdate.Visible = true;
+                    barUpdate.Value = updatePercent * 10;
+                    btnUpdatePrimary.Text = Loc.T("update.cancel");
+                    btnUpdatePrimary.Kind = BtnKind.Secondary;
+                    btnUpdatePrimary.Visible = true;
+                    break;
+                case UpdateState.Launching:
+                    lblUpdateStatus.Text = Loc.T("update.status.launching");
+                    break;
+                case UpdateState.Failed:
+                    lblUpdateStatus.Text = Loc.F("update.status.failed", updateError);
+                    btnUpdatePrimary.Text = Loc.T("update.retry");
+                    btnUpdatePrimary.Kind = BtnKind.Secondary;
+                    btnUpdatePrimary.Visible = true;
+                    btnUpdateLink.Text = Loc.T("update.openpage");
+                    btnUpdateLink.Visible = true;
+                    break;
+            }
+        }
+
+        private static string MbText(long bytes)
+        {
+            if (bytes <= 0) return "0.0";
+            return (bytes / 1048576.0).ToString("0.0", CultureInfo.InvariantCulture);
+        }
+
+        private void StartUpdateCheck(bool manual)
+        {
+            if (UpdateBusy) return;
+            if (updateCts != null)
+            {
+                try { updateCts.Dispose(); } catch { }
+                updateCts = null;
+            }
+            pendingUpdate = null;
+            updateError = "";
+            updateState = UpdateState.Checking;
+            RenderUpdateCard();
+
+            Task.Run(delegate
+            {
+                UpdateInfo info = null;
+                string err = null;
+                try
+                {
+                    info = Updater.QueryLatest(CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    err = ex.Message;
+                    Log.Write("update: check failed: " + ex);
+                }
+                SafeUi(delegate
+                {
+                    if (err != null)
+                    {
+                        updateState = UpdateState.Failed;
+                        updateError = err;
+                        RenderUpdateCard();
+                        if (manual) SetStatus(delegate { return Loc.F("update.status.failed", err); });
+                        return;
+                    }
+                    string current = Application.ProductVersion;
+                    bool newer = Updater.IsNewer(info, current);
+                    Log.Write("update: check current=" + current + " latest="
+                        + (info != null ? info.Version : "<null>") + " newer=" + newer
+                        + (newer ? " asset=" + info.AssetName : ""));
+                    if (newer)
+                    {
+                        pendingUpdate = info;
+                        updateState = UpdateState.Available;
+                        RenderUpdateCard();
+                        SetStatus(delegate { return Loc.F("update.notice.available", info.Version); });
+                        if (!Visible && notifyIcon != null)
+                        {
+                            notifyIcon.ShowBalloonTip(3000, "WallpaperChanger",
+                                Loc.F("update.notice.available", info.Version), ToolTipIcon.Info);
+                        }
+                    }
+                    else
+                    {
+                        updateState = UpdateState.UpToDate;
+                        RenderUpdateCard();
+                        if (manual) SetStatus(delegate { return Loc.T("update.notice.uptodate"); });
+                    }
+                });
+            });
+        }
+
+        // The first check happens a few seconds after startup: it must not
+        // compete with the initial wallpaper apply, and a tray start should not
+        // show network activity before the app has settled.
+        private void StartUpdateAutoCheck()
+        {
+            Task.Run(delegate
+            {
+                try { Thread.Sleep(4000); } catch { return; }
+                SafeUi(delegate
+                {
+                    if (!UpdateBusy) StartUpdateCheck(false);
+                });
+            });
+        }
+
+        private void StartDownload()
+        {
+            if (pendingUpdate == null || UpdateBusy) return;
+            if (updateCts != null)
+            {
+                try { updateCts.Cancel(); updateCts.Dispose(); } catch { }
+            }
+            updateCts = new CancellationTokenSource();
+            CancellationToken ct = updateCts.Token;
+            updateDone = 0;
+            updateTotal = pendingUpdate.AssetSize;
+            updatePercent = 0;
+            updateState = UpdateState.Downloading;
+            RenderUpdateCard();
+            SetStatus(delegate { return Loc.T("update.notice.downloading"); });
+
+            UpdateInfo info = pendingUpdate;
+            string dir = Updater.UpdatesDir();
+            Task.Run(delegate
+            {
+                string path = null;
+                string err = null;
+                DateTime last = DateTime.MinValue;
+                try
+                {
+                    path = Updater.Download(info, dir, delegate (long done, long total)
+                    {
+                        if (DateTime.UtcNow - last < TimeSpan.FromMilliseconds(150)) return;
+                        last = DateTime.UtcNow;
+                        SafeUi(delegate { OnUpdateProgress(done, total); });
+                    }, ct);
+                }
+                catch (OperationCanceledException)
+                {
+                    SafeUi(OnUpdateCancelled);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    err = ex.Message;
+                    Log.Write("update: download failed: " + ex);
+                }
+                if (err != null)
+                {
+                    string e = err;
+                    SafeUi(delegate
+                    {
+                        updateState = UpdateState.Failed;
+                        updateError = e;
+                        updatePercent = 0;
+                        RenderUpdateCard();
+                        SetStatus(delegate { return Loc.F("update.status.failed", e); });
+                    });
+                    return;
+                }
+                string final = path;
+                SafeUi(delegate { OnUpdateDownloaded(final); });
+            });
+        }
+
+        private void OnUpdateProgress(long done, long total)
+        {
+            updateDone = done;
+            if (total > 0) updateTotal = total;
+            if (updateTotal > 0) updatePercent = (int)Math.Min(100, done * 100 / updateTotal);
+            if (updateState == UpdateState.Downloading) RenderUpdateCard();
+        }
+
+        private void OnUpdateCancelled()
+        {
+            if (updateState != UpdateState.Downloading) return;
+            updateState = pendingUpdate != null ? UpdateState.Available : UpdateState.Idle;
+            updatePercent = 0;
+            RenderUpdateCard();
+            SetStatus(delegate { return Loc.T("update.notice.cancelled"); });
+        }
+
+        private void OnUpdateDownloaded(string installerPath)
+        {
+            if (string.IsNullOrEmpty(installerPath)) return;
+            updateState = UpdateState.Launching;
+            RenderUpdateCard();
+            try
+            {
+                Updater.LaunchInstaller(installerPath);
+            }
+            catch (Exception ex)
+            {
+                // A cancelled UAC prompt lands here (Win32 error 1223): keep
+                // the app running instead of leaving the user with nothing.
+                Log.Write("update: installer launch failed: " + ex);
+                updateState = UpdateState.Failed;
+                updateError = ex.Message;
+                RenderUpdateCard();
+                SetStatus(delegate { return Loc.F("update.status.failed", ex.Message); });
+                return;
+            }
+            // Setup needs the exe to be gone. Its [Run] entry starts the new
+            // build once the install finishes.
+            BeginInvoke(new Action(delegate
+            {
+                reallyExit = true;
+                if (notifyIcon != null) notifyIcon.Visible = false;
+                Application.Exit();
+            }));
+        }
+
+        private void OnUpdatePrimary()
+        {
+            switch (updateState)
+            {
+                case UpdateState.Available:
+                    if (CanAutoInstall()) StartDownload();
+                    else OpenReleasesPage();
+                    break;
+                case UpdateState.Downloading:
+                    if (updateCts != null)
+                    {
+                        try { updateCts.Cancel(); } catch { }
+                    }
+                    break;
+                case UpdateState.Failed:
+                    // pendingUpdate is set when the download failed; otherwise
+                    // it was the check itself that failed.
+                    if (pendingUpdate != null) StartDownload();
+                    else StartUpdateCheck(true);
+                    break;
+            }
+        }
+
+        private void OpenReleasesPage()
+        {
+            try
+            {
+                Updater.OpenReleasesPage();
+            }
+            catch (Exception ex)
+            {
+                SetStatus(delegate { return Loc.F("update.status.failed", ex.Message); });
+            }
         }
 
         // Re-apply every user-visible string of this form (and the tray) in
@@ -854,6 +1281,7 @@ namespace WallpaperChanger
             btnOpenFolder.Text = Loc.T("gen.open.folder");
             lblCfgPath.Text = ConfigPathText();
             lblAbout.Text = Loc.F("gen.about.line", Application.ProductVersion, SupportedFormats());
+            RenderUpdateCard();
 
             miNext.Text = Loc.T("tray.next");
             miPrev.Text = Loc.T("tray.prev");
@@ -1411,6 +1839,7 @@ namespace WallpaperChanger
             SyncLanguageCombo();
             RefreshStrip();
             swAutoStart.Checked = Config.AutoStart;
+            if (swUpdateCheck != null) swUpdateCheck.Checked = Config.CheckUpdates;
             keyNext.Value = (Config.Hotkey >= 0 && Config.Hotkey <= 9) ? Config.Hotkey : -1;
             keyPrev.Value = (Config.HotkeyPrev >= 0 && Config.HotkeyPrev <= 9) ? Config.HotkeyPrev : -1;
             SyncThemeSeg();
@@ -1447,6 +1876,7 @@ namespace WallpaperChanger
             // never-populated dropdown cannot write a bogus index.
             Config.RotateOrder = Math.Max(0, Math.Min(2, cmbOrder.SelectedIndex));
             Config.AutoStart = swAutoStart.Checked;
+            if (swUpdateCheck != null) Config.CheckUpdates = swUpdateCheck.Checked;
             // Hotkeys are written straight to Config by the key caps on
             // commit, so there is nothing to collect for them here.
         }
@@ -2854,6 +3284,11 @@ namespace WallpaperChanger
                 if (hotkeyManager != null) hotkeyManager.Dispose();
                 if (notifyIcon != null) notifyIcon.Dispose();
                 if (rotateTimer != null) rotateTimer.Dispose();
+                if (updateCts != null)
+                {
+                    try { updateCts.Cancel(); updateCts.Dispose(); } catch { }
+                    updateCts = null;
+                }
             }
             base.Dispose(disposing);
         }
@@ -2921,6 +3356,64 @@ namespace WallpaperChanger
         {
             if (i < 0 || i >= cardTextRefs.Count) return "<no card>";
             return cardTextRefs[i].Note;
+        }
+
+        // /updatewindow: the update card sits at the bottom of the General page,
+        // so a screenshot of it needs the page scrolled there. ScrollTo clamps
+        // to the real maximum, so any large value means "the end".
+        internal void Test_ScrollPageToBottom(int pageIndex)
+        {
+            if (pageIndex < 0 || pageIndex >= pages.Count) return;
+            pages[pageIndex].ScrollTo(1000000);
+        }
+
+        // /updatewindow: drive the update card into a state so its layout can
+        // be photographed without a network call or a real release. The fake
+        // version is deliberately far ahead so every "new version" branch is
+        // reachable.
+        internal void Test_SetUpdateState(string state)
+        {
+            testForceInstalled = true;
+            UpdateInfo fake = new UpdateInfo();
+            fake.Version = "9.9.9";
+            fake.Tag = "v9.9.9";
+            fake.PageUrl = Updater.ReleasesUrl;
+            fake.AssetName = "WallpaperChanger-Setup-9.9.9.exe";
+            fake.AssetUrl = "https://github.com/tiny-andr/WallpaperChanger/releases/download/v9.9.9/WallpaperChanger-Setup-9.9.9.exe";
+            fake.Digest = "sha256:" + new string('a', 64);
+            fake.AssetSize = 66631520;
+            pendingUpdate = fake;
+            updateDone = 29000000;
+            updateTotal = 66631520;
+            updatePercent = 43;
+            updateError = "";
+
+            switch (state)
+            {
+                case "available":
+                    updateState = UpdateState.Available;
+                    break;
+                case "portable":
+                    testForceInstalled = false;
+                    updateState = UpdateState.Available;
+                    break;
+                case "downloading":
+                    updateState = UpdateState.Downloading;
+                    break;
+                case "failed":
+                    updateState = UpdateState.Failed;
+                    updateError = "HTTP 404";
+                    break;
+                case "uptodate":
+                    pendingUpdate = null;
+                    updateState = UpdateState.UpToDate;
+                    break;
+                default:
+                    pendingUpdate = null;
+                    updateState = UpdateState.Idle;
+                    break;
+            }
+            RenderUpdateCard();
         }
     }
 }

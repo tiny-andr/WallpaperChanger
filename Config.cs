@@ -86,6 +86,12 @@ namespace WallpaperChanger
         }
         public static bool AutoStart = false;
         public static bool Recursive = true;
+
+        // Background update check at startup. On by default: it only reads the
+        // public GitHub releases API, never installs anything without the user
+        // pressing the update button on the General page. Stored as
+        // check_updates=; a missing key reads as on.
+        public static bool CheckUpdates = true;
         public static int Hotkey = -1;            // -1 none, 0-9 = Ctrl+digit (next wallpaper)
         public static int HotkeyPrev = 8;         // -1 none, 0-9 = Ctrl+digit (previous wallpaper)
 
@@ -259,6 +265,7 @@ namespace WallpaperChanger
                 // value means "no record", and the walk starts at the front.
                 if (single.TryGetValue("last_applied", out v)) LastApplied = v.Trim();
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
+                if (single.TryGetValue("check_updates", out v)) CheckUpdates = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("sort", out v))
                 {
@@ -346,6 +353,7 @@ namespace WallpaperChanger
                 // Where rotation stopped, so the next session resumes there.
                 if (LastApplied.Length > 0) sb.AppendLine("last_applied=" + LastApplied);
                 sb.AppendLine("auto_start=" + (AutoStart ? "1" : "0"));
+                sb.AppendLine("check_updates=" + (CheckUpdates ? "1" : "0"));
                 sb.AppendLine("recursive=" + (Recursive ? "1" : "0"));
                 sb.AppendLine("sort=" + PickerSort);
                 sb.AppendLine("hotkey=" + Hotkey);

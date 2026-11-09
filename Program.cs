@@ -255,6 +255,52 @@ namespace WallpaperChanger
                 return;
             }
 
+            // Diagnostic:  WallpaperChanger.exe /updatetest
+            // Offline assertions for the updater plumbing: version comparison,
+            // release JSON parsing, digest handling, mirror URL building. No
+            // network, no window.
+            if (args.Length > 0 && args[0].Equals("/updatetest", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunUpdateTest());
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /updatecheck
+            // Live query of the latest release, printing what the update card
+            // would show (including the digest the asset is verified against).
+            if (args.Length > 0 && args[0].Equals("/updatecheck", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunUpdateCheck());
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /updatedownload [dir] [--keep]
+            // Downloads the latest installer through the same direct+mirror
+            // chain and verifies its SHA256. The config and the live wallpaper
+            // are untouched; the file is deleted afterwards unless --keep.
+            if (args.Length > 0 && args[0].Equals("/updatedownload", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(RunUpdateDownload(args));
+                return;
+            }
+
+            // Diagnostic:  WallpaperChanger.exe /updatewindow <pngPath> [state]
+            // Photographs the update card in a chosen state (idle / available /
+            // portable / downloading / failed / uptodate) without any network
+            // call, so its layout can be checked the way /dpiwindow checks the
+            // rest of the window.
+            if (args.Length > 0 && args[0].Equals("/updatewindow", StringComparison.OrdinalIgnoreCase))
+            {
+                string png = args.Length > 1 ? args[1] : "updatewindow.png";
+                string state = args.Length > 2 ? args[2] : "available";
+                string lang = args.Length > 3 ? args[3] : Loc.Zh;
+                int dpi = 0;
+                if (args.Length > 4) int.TryParse(args[4], out dpi);
+                bool dark = args.Length > 5 && args[5].Equals("dark", StringComparison.OrdinalIgnoreCase);
+                Environment.Exit(RunUpdateWindow(png, state, lang, dpi, dark));
+                return;
+            }
+
             // Started by the Startup shortcut: come up in the tray, no window.
             bool startInTray = false;
             foreach (string a in args)
@@ -1734,6 +1780,309 @@ namespace WallpaperChanger
             {
                 Log.Write("silent apply error: " + ex.Message);
                 return 1;
+            }
+        }
+
+        // ---- update diagnostics --------------------------------------------
+
+        // Offline: everything the upgrader decides before it touches the
+        // network. The release JSON below is the shape api.github.com actually
+        // returns (digest included), so a changed API shape fails here instead
+        // of at "no update found" on a user's machine.
+        private static int RunUpdateTest()
+        {
+            int pass = 0, fail = 0;
+            try
+            {
+                string[] cases = {
+                    "2.0.11<2.0.12", "2.0.9<2.0.10", "2.1=2.1.0", "2.10>2.9",
+                    "v2.0.12=2.0.12", "2.0.12<2.0.12.1", "2.0.0>2.0.0-beta"
+                };
+                foreach (string c in cases)
+                {
+                    int sep = c.IndexOfAny(new char[] { '<', '=', '>' });
+                    string a = c.Substring(0, sep);
+                    string op = c.Substring(sep, 1);
+                    string b = c.Substring(sep + 1);
+                    int cmp = Updater.CompareVersions(a, b);
+                    bool ok = op == "<" ? cmp < 0 : op == "=" ? cmp == 0 : cmp > 0;
+                    CheckUpdate(ref pass, ref fail, "compare " + c, ok, "cmp=" + cmp);
+                }
+
+                CheckUpdate(ref pass, ref fail, "normalize v-prefix",
+                    Updater.NormalizeVersion("v2.0.12") == "2.0.12",
+                    Updater.NormalizeVersion("v2.0.12"));
+                CheckUpdate(ref pass, ref fail, "normalize build metadata",
+                    Updater.NormalizeVersion("2.0.12+abc") == "2.0.12",
+                    Updater.NormalizeVersion("2.0.12+abc"));
+
+                const string shaAbc =
+                    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+                string abc = Updater.Sha256Hex(System.Text.Encoding.UTF8.GetBytes("abc"));
+                CheckUpdate(ref pass, ref fail, "sha256 of abc", abc == shaAbc, abc);
+                CheckUpdate(ref pass, ref fail, "digest prefixes the algorithm",
+                    Updater.DigestHex("sha256:" + shaAbc) == shaAbc,
+                    Updater.DigestHex("sha256:" + shaAbc));
+                CheckUpdate(ref pass, ref fail, "digest rejects other algorithms",
+                    Updater.DigestHex("sha512:" + shaAbc) == "",
+                    Updater.DigestHex("sha512:" + shaAbc));
+                CheckUpdate(ref pass, ref fail, "digest matches case-insensitively",
+                    Updater.DigestMatches("sha256:" + shaAbc.ToUpperInvariant(), shaAbc),
+                    "mismatch");
+
+                const string json = "{"
+                    + "\"tag_name\":\"v2.0.12\",\"name\":\"v2.0.12\","
+                    + "\"html_url\":\"https://github.com/tiny-andr/WallpaperChanger/releases/tag/v2.0.12\","
+                    + "\"assets\":["
+                    + "{\"name\":\"WallpaperChanger-Setup-2.0.12.exe\",\"size\":66631520,"
+                    + "\"browser_download_url\":\"https://github.com/tiny-andr/WallpaperChanger/releases/download/v2.0.12/WallpaperChanger-Setup-2.0.12.exe\","
+                    + "\"digest\":\"sha256:" + shaAbc + "\"},"
+                    + "{\"name\":\"source.zip\",\"size\":12,"
+                    + "\"browser_download_url\":\"https://example.com/source.zip\","
+                    + "\"digest\":null}"
+                    + "]}";
+                UpdateInfo info = Updater.ParseReleaseJson(json);
+                CheckUpdate(ref pass, ref fail, "release tag becomes a version",
+                    info.Version == "2.0.12", info.Version);
+                CheckUpdate(ref pass, ref fail, "setup asset is picked",
+                    info.AssetName == "WallpaperChanger-Setup-2.0.12.exe", info.AssetName);
+                CheckUpdate(ref pass, ref fail, "asset size is read",
+                    info.AssetSize == 66631520, info.AssetSize.ToString());
+                CheckUpdate(ref pass, ref fail, "asset digest is kept",
+                    info.Digest == "sha256:" + shaAbc, info.Digest);
+                CheckUpdate(ref pass, ref fail, "newer release is detected",
+                    Updater.IsNewer(info, "2.0.11"), "false");
+                CheckUpdate(ref pass, ref fail, "same release is not newer",
+                    !Updater.IsNewer(info, "2.0.12"), "true");
+
+                string[] candidates = Updater.CandidateUrls(info.AssetUrl);
+                CheckUpdate(ref pass, ref fail, "direct GitHub url comes first",
+                    candidates.Length == 5 && candidates[0] == info.AssetUrl,
+                    candidates.Length + " candidates");
+                CheckUpdate(ref pass, ref fail, "ghfast mirror follows",
+                    candidates.Length > 1 && candidates[1] == "https://ghfast.top/" + info.AssetUrl,
+                    candidates.Length > 1 ? candidates[1] : "<none>");
+                CheckUpdate(ref pass, ref fail, "every mirror is used last-to-first",
+                    candidates.Length > 4 && candidates[4] == "https://ghproxy.site/" + info.AssetUrl,
+                    candidates.Length > 4 ? candidates[4] : "<none>");
+
+                // A release with no installer must not be presented as
+                // auto-installable; the card falls back to the download page.
+                UpdateInfo bare = Updater.ParseReleaseJson(
+                    "{\"tag_name\":\"v3.0.0\",\"assets\":[]}");
+                CheckUpdate(ref pass, ref fail, "release without asset stays empty",
+                    bare.AssetUrl == "" && bare.Version == "3.0.0", bare.AssetUrl);
+
+                // ini round trip for check_updates=: it is a normal setting,
+                // written by Save and read back by Load, and a hand-edited
+                // value must never crash the parser.
+                string cfgDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    "wc-updatetest-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+                try
+                {
+                    System.IO.Directory.CreateDirectory(cfgDir);
+                    string ini = System.IO.Path.Combine(cfgDir, "WallpaperChanger.ini");
+                    AppPaths.DataDirOverride = cfgDir;
+                    Config.CheckUpdates = false;
+                    Config.Save();
+                    Config.CheckUpdates = true;
+                    Config.Load();
+                    CheckUpdate(ref pass, ref fail, "check_updates=0 survives Save/Load",
+                        !Config.CheckUpdates, "true");
+
+                    System.IO.File.WriteAllText(ini, "check_updates=1\n",
+                        new System.Text.UTF8Encoding(false));
+                    Config.Load();
+                    CheckUpdate(ref pass, ref fail, "check_updates=1 reads as on",
+                        Config.CheckUpdates, "false");
+
+                    System.IO.File.WriteAllText(ini, "check_updates=garbage\n",
+                        new System.Text.UTF8Encoding(false));
+                    Config.Load();
+                    CheckUpdate(ref pass, ref fail, "garbage check_updates= falls back to off",
+                        !Config.CheckUpdates, "true");
+                }
+                finally
+                {
+                    Config.CheckUpdates = true;
+                    AppPaths.DataDirOverride = null;
+                    try { System.IO.Directory.Delete(cfgDir, true); } catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("updatetest error: " + ex);
+                fail++;
+            }
+            Log.Write("updatetest: pass=" + pass + " fail=" + fail);
+            Console.WriteLine("RESULT updatetest pass=" + pass + " fail=" + fail);
+            return fail == 0 ? 0 : 1;
+        }
+
+        private static void CheckUpdate(ref int pass, ref int fail, string what, bool ok, string got)
+        {
+            if (ok)
+            {
+                pass++;
+                Log.Write("updatetest PASS " + what);
+            }
+            else
+            {
+                fail++;
+                Log.Write("updatetest FAIL " + what + " [got: " + got + "]");
+                Console.WriteLine("FAIL " + what + " [got: " + got + "]");
+            }
+        }
+
+        private static int RunUpdateCheck()
+        {
+            try
+            {
+                UpdateInfo info = Updater.QueryLatest(System.Threading.CancellationToken.None);
+                bool newer = Updater.IsNewer(info, Application.ProductVersion);
+                Log.Write("updatecheck: current=" + Application.ProductVersion
+                    + " latest=" + info.Version + " newer=" + newer
+                    + " asset=" + info.AssetName + " size=" + info.AssetSize
+                    + " digest=" + info.Digest + " url=" + info.AssetUrl);
+                Console.WriteLine("current  : " + Application.ProductVersion);
+                Console.WriteLine("latest   : " + info.Version);
+                Console.WriteLine("newer    : " + newer);
+                Console.WriteLine("asset    : " + info.AssetName + " (" + info.AssetSize + ")");
+                Console.WriteLine("digest   : " + info.Digest);
+                Console.WriteLine("url      : " + info.AssetUrl);
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("updatecheck error: " + ex);
+                Console.WriteLine("updatecheck error: " + ex.Message);
+                return 1;
+            }
+        }
+
+        private static int RunUpdateDownload(string[] args)
+        {
+            string dir = null;
+            bool keep = false;
+            bool mirrorOnly = false;
+            for (int i = 1; i < args.Length; i++)
+            {
+                if (args[i].Equals("--keep", StringComparison.OrdinalIgnoreCase)) keep = true;
+                else if (args[i].Equals("--mirror", StringComparison.OrdinalIgnoreCase)) mirrorOnly = true;
+                else if (dir == null) dir = args[i];
+            }
+            if (dir == null)
+            {
+                dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    "wc-update-test-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            }
+            try
+            {
+                UpdateInfo info = Updater.QueryLatest(System.Threading.CancellationToken.None);
+                if (string.IsNullOrEmpty(info.AssetUrl))
+                {
+                    Log.Write("updatedownload: release has no installer asset");
+                    return 1;
+                }
+                int lastBucket = -2;
+                string path = Updater.Download(info, dir, delegate (long done, long total)
+                {
+                    int pct = total > 0 ? (int)(done * 100 / total) : -1;
+                    int bucket = pct / 10;
+                    if (bucket == lastBucket) return;
+                    lastBucket = bucket;
+                    Log.Write("updatedownload: " + (pct >= 0 ? pct + "%" : "?")
+                        + " " + done + "/" + total);
+                }, System.Threading.CancellationToken.None, mirrorOnly ? 1 : 0);
+
+                string hash = Updater.Sha256File(path);
+                bool ok = Updater.DigestMatches(info.Digest, hash);
+                long size = new System.IO.FileInfo(path).Length;
+                Log.Write("updatedownload: " + (ok ? "OK" : "BAD")
+                    + " mirror=" + (Updater.LastMirror.Length == 0 ? "GitHub" : Updater.LastMirror)
+                    + " file=" + path + " size=" + size + " sha256=" + hash);
+                Console.WriteLine("downloaded : " + path);
+                Console.WriteLine("mirror     : "
+                    + (Updater.LastMirror.Length == 0 ? "GitHub" : Updater.LastMirror));
+                Console.WriteLine("sha256     : " + (ok ? "OK " : "MISMATCH ") + hash);
+                if (!keep)
+                {
+                    try { System.IO.Directory.Delete(dir, true); } catch { }
+                }
+                return ok ? 0 : 1;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("updatedownload error: " + ex);
+                Console.WriteLine("updatedownload error: " + ex.Message);
+                return 1;
+            }
+        }
+
+        // Photograph the update card in a given state. Runs the real window,
+        // which is the only way the card's wrapped text, the switch placement
+        // and the button row can be judged; no network call is made.
+        private static int RunUpdateWindow(string pngPath, string state, string lang, int dpi, bool dark)
+        {
+            string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                "wc-updatewindow-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+            try
+            {
+                System.IO.Directory.CreateDirectory(dir);
+                AppPaths.DataDirOverride = dir;
+                Config.Folders = new List<string>();
+                if (lang != Loc.Zh && lang != Loc.En && lang != Loc.Ja) lang = Loc.Zh;
+                Config.Language = lang;
+                Config.ThemeMode = dark ? AppTheme.Dark : AppTheme.Light;
+                Config.Save();
+                Loc.SetLanguage(Config.Language);
+
+                MainForm form = new MainForm();
+                form.StartPosition = FormStartPosition.Manual;
+                System.Windows.Forms.Screen monitor = dpi > 0 ? FindMonitorAtDpi(dpi) : null;
+                form.Location = monitor != null
+                    ? new System.Drawing.Point(monitor.Bounds.X + 60, monitor.Bounds.Y + 60)
+                    : new System.Drawing.Point(60, 60);
+                form.Show();
+                Pump(2200);
+                form.Test_SetUpdateState(state);
+                System.Reflection.MethodInfo m = typeof(MainForm).GetMethod("ShowPage",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (m != null)
+                {
+                    m.Invoke(form, new object[] { 2 });
+                    Pump(400);
+                }
+                // The card lives at the bottom of the page, below the config
+                // card: photograph it from there, not from the page top.
+                form.Test_ScrollPageToBottom(2);
+                Pump(500);
+                Log.Write("updatewindow: state=" + state + " size=" + form.Width + "x" + form.Height);
+                using (System.Drawing.Bitmap bmp =
+                    new System.Drawing.Bitmap(form.Width, form.Height))
+                {
+                    bool ok = false;
+                    using (System.Drawing.Graphics g = System.Drawing.Graphics.FromImage(bmp))
+                    {
+                        IntPtr hdc = g.GetHdc();
+                        try { ok = PrintWindow(form.Handle, hdc, 2); }
+                        finally { g.ReleaseHdc(hdc); }
+                    }
+                    bmp.Save(pngPath, System.Drawing.Imaging.ImageFormat.Png);
+                    Log.Write("updatewindow: saved " + pngPath + " (" + bmp.Width + "x" + bmp.Height + ", ok=" + ok + ")");
+                }
+                form.Dispose();
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Log.Write("updatewindow error: " + ex);
+                return 1;
+            }
+            finally
+            {
+                AppPaths.DataDirOverride = null;
+                try { System.IO.Directory.Delete(dir, true); } catch { }
             }
         }
 

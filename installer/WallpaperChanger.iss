@@ -2,7 +2,7 @@
 ; Build:  "C:\Users\Administrator\InnoSetup6\ISCC.exe" WallpaperChanger.iss
 
 #define MyAppName "WallpaperChanger"
-#define MyAppVersion "2.0.11"
+#define MyAppVersion "2.0.12"
 #define MyAppExe "WallpaperChanger.exe"
 
 [Setup]
@@ -43,7 +43,10 @@ Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: autost
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExe}"; Description: "启动 {#MyAppName}"; Tasks: runnow; Flags: nowait postinstall skipifsilent
+; No skipifsilent: the in-app updater starts this installer with /VERYSILENT
+; and then exits, so the app has to come back by itself afterwards. An
+; interactive install still starts it from the finished page (postinstall).
+Filename: "{app}\{#MyAppExe}"; Description: "启动 {#MyAppName}"; Tasks: runnow; Flags: nowait postinstall
 
 
 

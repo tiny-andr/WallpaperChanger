@@ -35,6 +35,7 @@ The big button at the bottom of the rail shows the rotation state (**Rotating** 
 - **Manual wallpaper picker** — curate exactly which wallpapers rotate: **Pick wallpapers** on the Sources page opens the 16:9 grid (live file-name filter plus select-all / select-none / invert acting on the filtered set, and a source filter when several sources feed it; reopening starts on the checked view). Checking any wallpaper turns manual mode on; unchecking all of them turns it off. While active, auto rotation and "next" only draw from the checked set. Selections persist across restarts; newly added images default to unchecked
 - **Tray resident** — right-click the tray icon for pause / next / previous / manual picker / open / exit; closing the window just minimizes to tray
 - **Auto start with Windows** (optional) — boots straight into the tray with no window; launching the app again just brings the existing window to the front
+- **Built-in auto-update** — checks the GitHub release feed at startup (can be switched off on the General page), downloads the new installer through a fallback list of public GitHub mirrors with SHA256 verification, then upgrades silently after one UAC prompt. Portable copies open the download page instead
 - **Supported formats** — jpg / png / jfif / bmp / webp / gif / tiff; `Thumbs.db` and corrupt images are skipped automatically
 - Chinese, English and Japanese interface. Fit style, interval and order are written when you press **Save settings**; language and theme apply and save on the spot
 - The window is a fixed 980x668: it neither maximizes nor resizes, because the layout follows the design's fixed coordinates
@@ -45,7 +46,7 @@ Grab the latest installer from the [Releases](https://github.com/tiny-andr/Wallp
 
 No .NET runtime needed — the app is self-contained.
 
-> Current version: **v2.0.11**
+> Current version: **v2.0.12**
 
 ## Usage
 

@@ -1588,6 +1588,59 @@ namespace WallpaperChanger
         }
     }
 
+    // ---- thin progress bar ----------------------------------------------
+
+    // Self-painted progress for the update card. Value is per-mille (0..1000),
+    // not a percentage: the download callback fires on the worker thread and a
+    // whole percent would visibly jump between repaints on a fast mirror.
+    internal class ProgressBar : Control, IThemed
+    {
+        private int value;
+
+        public int Value
+        {
+            get { return value; }
+            set
+            {
+                int v = Math.Max(0, Math.Min(1000, value));
+                if (v == this.value) return;
+                this.value = v;
+                Invalidate();
+            }
+        }
+
+        public ProgressBar()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                     ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            Height = 6;
+        }
+
+        public void ApplyTheme()
+        {
+            Invalidate();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs pevent)
+        {
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.Clear(Parent != null ? Parent.BackColor : Theme.Surface);
+
+            float rad = Math.Min(Height / 2f, Gfx.S(this, 3));
+            Gfx.FillRound(g, new RectangleF(0, 0, Width, Height), rad, Theme.Border);
+            if (value <= 0) return;
+            float w = Width * value / 1000f;
+            if (w < Height) w = Math.Min(Height, Width);
+            if (w > Width) w = Width;
+            Gfx.FillRound(g, new RectangleF(0, 0, w, Height), rad, Theme.Accent);
+        }
+    }
+
     // ---- left nav rail --------------------------------------------------
 
     internal class NavRail : Control, IThemed
