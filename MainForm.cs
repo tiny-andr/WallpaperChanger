@@ -2941,14 +2941,18 @@ namespace WallpaperChanger
             base.OnFormClosing(e);
         }
 
-        // Physical-pixel floor for the window, scaled from the design constants.
-        // MinimumSize is physical, Theme.WindowMinW/H are design pixels.
+        // Physical-pixel floor for the window.
+        //
+        // Theme.WindowMinW/H are already expressed in the same unit as
+        // Theme.WindowW/H (WindowMinW == WindowW == 980), and those two are used
+        // raw as the initial Size, so the floor must be used raw as well.
+        // Scaling it by DPI while the design size was not made the floor LARGER
+        // than the intended window at any scaling above 100%: at 150% the window
+        // grew to 1470x930 instead of 980x668 and the overview card stretched
+        // with it.
         private Size ScaledMinimumSize()
         {
-            int dpi = DeviceDpi > 0 ? DeviceDpi : 96;
-            return new Size(
-                (int)Math.Round(Theme.WindowMinW * dpi / 96.0),
-                (int)Math.Round(Theme.WindowMinH * dpi / 96.0));
+            return new Size(Theme.WindowMinW, Theme.WindowMinH);
         }
 
         // Persist the size in 96-DPI logical units. The raw pixels of a 150%
