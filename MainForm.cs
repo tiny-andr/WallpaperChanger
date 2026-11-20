@@ -1537,12 +1537,37 @@ namespace WallpaperChanger
             int gen = ++countGeneration;
             Task.Run(delegate
             {
+                // While counting, also work out how many wallpapers can actually
+                // be rotated: the scan needed for the count has already read
+                // every file, so intersecting it with the checked set costs
+                // nothing extra. Without this the "in rotation" figure on the
+                // overview card had no source until the first switch and fell
+                // back to the number of STORED CHECKS, which disagrees with
+                // "images scanned" as soon as a check points at a deleted file
+                // (80 checks, 754 scanned, 68 actually rotatable).
+                //
+                // Counted over every configured source, not just the pending
+                // ones in todo: a refresh only re-scans some of them, and a pool
+                // built from that subset would be wrong.
+                List<string> all = new List<string>();
+                int scannedEnabled = 0;
                 foreach (string f in todo)
                 {
                     int n;
                     try
                     {
-                        n = Directory.Exists(f) ? ImageScanner.Scan(f, recursive).Count : -1;
+                        List<string> found = Directory.Exists(f)
+                            ? ImageScanner.Scan(f, recursive) : null;
+                        n = found == null ? -1 : found.Count;
+                        // Only enabled sources rotate, so only their images can
+                        // be part of the pool. Counting a disabled source's files
+                        // into it would report images the user explicitly turned
+                        // off.
+                        if (found != null && Config.IsSourceEnabled(f))
+                        {
+                            all.AddRange(found);
+                            scannedEnabled++;
+                        }
                     }
                     catch
                     {
@@ -1556,6 +1581,27 @@ namespace WallpaperChanger
                         RefreshSourceSummary();
                     });
                 }
+
+                // The pool is only meaningful when the checked set is in play;
+                // otherwise every scanned image rotates and there is nothing to
+                // intersect.
+                if (Config.ManualPicked.Count == 0) return;
+                // A partial refresh (only the pending rows) would build the pool
+                // from a subset and report it as the whole thing.
+                if (scannedEnabled != Config.EnabledFolders().Count) return;
+                if (all.Count == 0) return;
+                int poolCount;
+                try { poolCount = RestrictToPicked(all).Count; }
+                catch { return; }
+                SafeUi(delegate
+                {
+                    if (gen != countGeneration) return;
+                    // RefreshNowCard falls back to the stored check count on 0,
+                    // so a legitimately empty pool keeps looking like "N checked".
+                    if (poolCount > 0) lastTotal = poolCount;
+                    RefreshNowCard();
+                    SyncOverviewFacts();
+                });
             });
         }
 
@@ -1673,7 +1719,18 @@ namespace WallpaperChanger
             bool has = !string.IsNullOrEmpty(cur);
             bool manual = Config.ManualPicked.Count > 0;
 
-            factVal[0].Text = (manual ? Config.ManualPicked.Count : lastTotal).ToString();
+            // "In rotation" is how many wallpapers can actually be shown, which
+            // is the last scanned pool - not the number of stored checks. Those
+            // two drift apart as soon as a file is deleted, a source is disabled
+            // or a drive is unplugged: 80 checks against 68 scanned files made
+            // the card read "80 in rotation / 68 images scanned", i.e. a subset
+            // larger than its superset. The checked count is only a fallback for
+            // the window between launch and the first scan, where lastTotal is
+            // still 0 and saying "0" would be worse than saying the stored
+            // count.
+            int pool = lastTotal > 0 ? lastTotal : Config.ManualPicked.Count;
+
+            factVal[0].Text = pool.ToString();
             factVal[1].Text = lastTotal.ToString();
             factVal[2].Text = manual ? Loc.T("ov.mode.manual") : Loc.T("ov.mode.all");
 
@@ -1758,7 +1815,10 @@ namespace WallpaperChanger
             if (srcList == null || factVal[0] == null) return;
             if (Config.ManualPicked.Count > 0)
             {
-                factVal[0].Text = Config.ManualPicked.Count.ToString();
+                // Same reasoning as RefreshNowCard: the pool that can actually be
+                // rotated is the scanned count, and the stored check count is
+                // only a stand-in until the first scan finishes.
+                factVal[0].Text = (lastTotal > 0 ? lastTotal : Config.ManualPicked.Count).ToString();
                 factVal[1].Text = SourceTotals().ToString();
                 factVal[2].Text = Loc.T("ov.mode.manual");
                 return;
@@ -2143,7 +2203,7 @@ namespace WallpaperChanger
                             PushHistory(path);
                             Log.Write("next(redo): " + path);
                             string n1 = name; int t1 = total;
-                            SetStatus(delegate { return Loc.F("status.current", n1, t1) + ModeTag(); });
+                            SetStatus(delegate { return Loc.F("status.current", n1, t1); });
                         }
                         else
                         {
@@ -2285,7 +2345,7 @@ namespace WallpaperChanger
                     RememberApplied(path);
                     lastTotal = total;
                     string n3 = Path.GetFileName(path); int t3 = total;
-                    SetStatus(delegate { return Loc.F("status.current", n3, t3) + ModeTag(); });
+                    SetStatus(delegate { return Loc.F("status.current", n3, t3); });
                 }
                 else
                 {
@@ -2485,15 +2545,6 @@ namespace WallpaperChanger
             return pool;
         }
 
-        // Status suffix shown while any wallpaper is checked, so the mode
-        // is visible on every wallpaper line without extra dialogs.
-        private string ModeTag()
-        {
-            return Config.ManualPicked.Count > 0
-                ? Loc.F("mode.tag", Config.ManualPicked.Count)
-                : "";
-        }
-
         // Remember an applied wallpaper (newest last). Called on the UI thread
         // only; duplicates of the current entry are ignored.
         private void PushHistory(string path)
@@ -2669,7 +2720,7 @@ namespace WallpaperChanger
                             lastApplied = path;
                             RememberApplied(path);
                             RebuildHistory();
-                            SetStatus(delegate { return Loc.F("status.current", name, lastTotal) + ModeTag(); });
+                            SetStatus(delegate { return Loc.F("status.current", name, lastTotal); });
                         }
                         else
                         {
@@ -2737,7 +2788,7 @@ namespace WallpaperChanger
                             RememberApplied(target);
                             Log.Write("previous: " + target);
                             string n5 = name;
-                            SetStatus(delegate { return Loc.F("status.current.prev", n5) + ModeTag(); });
+                            SetStatus(delegate { return Loc.F("status.current.prev", n5); });
                         }
                         else
                         {
