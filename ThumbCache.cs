@@ -44,6 +44,11 @@ namespace WallpaperChanger
                 bmp.Dispose();
             }
             catch { }
+            // The cache file is unreadable or the wrong size: drop it so the
+            // next Generate() can rebuild instead of being skipped by the
+            // File.Exists shortcut. Without this, one truncated PNG (killed
+            // mid-write by an older build) poisoned that tile permanently.
+            try { File.Delete(cp); } catch { }
             return null;
         }
 
@@ -64,7 +69,23 @@ namespace WallpaperChanger
                 try
                 {
                     Directory.CreateDirectory(CacheDir);
-                    thumb.Save(cp, ImageFormat.Png);
+                    // Save to a side file and move it into place. Saving straight
+                    // to cp meant a process killed mid-write left a truncated
+                    // PNG that still *exists*, and File.Exists is what Get() and
+                    // this method treat as "done" - so that tile stayed blank
+                    // forever (Get fails to decode it, Generate refuses to
+                    // rebuild it) until the source file's mtime changed.
+                    string temp = cp + ".tmp";
+                    thumb.Save(temp, ImageFormat.Png);
+                    try
+                    {
+                        File.Move(temp, cp);   // atomic on the same volume
+                    }
+                    catch
+                    {
+                        try { File.Copy(temp, cp, true); } catch { }
+                        try { File.Delete(temp); } catch { }
+                    }
                 }
                 catch { }
                 finally { thumb.Dispose(); }

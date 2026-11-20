@@ -127,6 +127,9 @@ namespace WallpaperChanger
 
             m["status.saved"] = "设置已保存";
             m["status.savefail"] = "保存失败：配置目录不可写，设置未落盘";
+            m["status.nothingnext"] = "池子里只有这一张壁纸，没有可切换的下一张";
+            m["status.busy"] = "正在切换壁纸，请稍候…";
+            m["update.err.timeout"] = "连接 GitHub 超时";
             m["hotkey.err.same"] = "上一张快捷键不能与下一张相同（都是 Ctrl+{0}）";
             m["hotkey.err.next"] = "下一张快捷键 Ctrl+{0} 注册失败（可能已被其他程序占用）";
             m["hotkey.err.prev"] = "上一张快捷键 Ctrl+{0} 注册失败（可能已被其他程序占用）";
@@ -366,6 +369,9 @@ namespace WallpaperChanger
 
             m["status.saved"] = "Settings saved";
             m["status.savefail"] = "Save failed: the config folder is not writable, nothing was stored";
+            m["status.nothingnext"] = "That is the only wallpaper in the pool, there is no next one";
+            m["status.busy"] = "A wallpaper switch is already running, please wait...";
+            m["update.err.timeout"] = "Timed out connecting to GitHub";
             m["hotkey.err.same"] = "Previous hotkey cannot match Next (both Ctrl+{0})";
             m["hotkey.err.next"] = "Could not register the Next hotkey Ctrl+{0} (another program may be using it)";
             m["hotkey.err.prev"] = "Could not register the Previous hotkey Ctrl+{0} (another program may be using it)";
@@ -602,6 +608,9 @@ namespace WallpaperChanger
 
             m["status.saved"] = "設定を保存しました";
             m["status.savefail"] = "保存に失敗: 設定フォルダーに書き込めません";
+            m["status.nothingnext"] = "プールにはこの1枚しかないため、次に切り替えられません";
+            m["status.busy"] = "壁紙を切り替えています。しばらくお待ちください…";
+            m["update.err.timeout"] = "GitHub への接続がタイムアウトしました";
             m["hotkey.err.same"] = "前の壁紙のショートカットは次と同じにできません（どちらも Ctrl+{0}）";
             m["hotkey.err.next"] = "次の壁紙のショートカット Ctrl+{0} を登録できませんでした（他のプログラムが使用中の可能性があります）";
             m["hotkey.err.prev"] = "前の壁紙のショートカット Ctrl+{0} を登録できませんでした（他のプログラムが使用中の可能性があります）";

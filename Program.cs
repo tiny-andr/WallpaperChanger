@@ -1074,6 +1074,16 @@ namespace WallpaperChanger
                     Join(form.Test_PickedNames()) == pickedBefore,
                     Join(form.Test_PickedNames()) + " (was " + pickedBefore + ")");
 
+                // Redirect the config BEFORE the first Config.Save() below. The
+                // redirect used to start further down, so the out-of-range
+                // round trip (sort=99, sort=-1) and its cleanup wrote the REAL
+                // ini: running /pickertest silently reset the user's picker sort
+                // to 0. Everything from here to the restore point writes to a
+                // throwaway directory.
+                string earlyCfg = System.IO.Path.Combine(dir, "test-config-early");
+                System.IO.Directory.CreateDirectory(earlyCfg);
+                AppPaths.DataDirOverride = earlyCfg;
+
                 foreach (int i in new int[] { 0, 3, 5, 99, -1 })
                 {
                     Config.PickerSort = i;
@@ -1084,6 +1094,8 @@ namespace WallpaperChanger
                     Check(ref pass, ref fail, "config sort=" + i + " falls back to " + want,
                         Config.PickerSort == want, "got " + Config.PickerSort);
                 }
+                // Hand the same throwaway root to the round-trip block below.
+                AppPaths.DataDirOverride = null;
                 // ---- the full round trip the real user makes: choose a sort,
                 // leave the window, open it again. Setting Config and calling
                 // Config.Save() is exactly what OnSortChanged does, so what this
@@ -1130,7 +1142,9 @@ namespace WallpaperChanger
                         "combo index " + reopened.Test_SortComboIndex);
                     reopened.Dispose();
                 }
-                AppPaths.DataDirOverride = null;
+                // Stay inside the throwaway directory: resetting sort=0 here used
+                // to run AFTER the redirect was cleared, so this cleanup was the
+                // step that overwrote the user's real picker sort.
                 Config.PickerSort = 0;
                 Config.Save();
 
@@ -1149,6 +1163,9 @@ namespace WallpaperChanger
                 }
                 Config.PickerSort = 0;
                 Config.Save();
+                // Only now, with every Config.Save() in this switch finished, let
+                // the real directory back in.
+                AppPaths.DataDirOverride = null;
 
                 form.Dispose();
             }
@@ -1256,6 +1273,18 @@ namespace WallpaperChanger
                     CheckOrder(ref pass, ref fail, label + " restarts when the current file left the pool",
                         NameOf(MainForm.NextInOrder(ordered, gone)) == want[0],
                         NameOf(MainForm.NextInOrder(ordered, gone)));
+
+                    // A pool of exactly one has no next entry. Returning that one
+                    // file made every timer tick re-apply what was already on
+                    // screen, so the desktop flashed on each interval; null says
+                    // "nothing to switch to" instead.
+                    List<string> single = new List<string> { ordered[0] };
+                    CheckOrder(ref pass, ref fail, label + " single-entry pool has no next",
+                        MainForm.NextInOrder(single, ordered[0]) == null,
+                        NameOf(MainForm.NextInOrder(single, ordered[0])));
+                    CheckOrder(ref pass, ref fail, label + " single-entry pool with no anchor has no next",
+                        MainForm.NextInOrder(single, null) == null,
+                        NameOf(MainForm.NextInOrder(single, null)));
                 }
 
                 // ---- equal timestamps must not degenerate into random order

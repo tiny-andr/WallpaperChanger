@@ -101,15 +101,36 @@ namespace WallpaperChanger
 
         public static UpdateInfo QueryLatest(CancellationToken ct)
         {
-            using (HttpResponseMessage resp = apiClient.GetAsync(ApiUrl,
-                HttpCompletionOption.ResponseHeadersRead, ct).GetAwaiter().GetResult())
+            // HttpClient.Timeout does not cover the body once
+            // HttpCompletionOption.ResponseHeadersRead is used: it stops at the
+            // response headers, so a proxy that sends the status line and then
+            // goes quiet hangs ReadAsStringAsync forever. The caller passes
+            // CancellationToken.None, so nothing else was timing this out - the
+            // update card sat on "checking" with every button disabled and no
+            // way back except restarting the app.
+            using (CancellationTokenSource total = CancellationTokenSource.CreateLinkedTokenSource(ct))
             {
-                if (!resp.IsSuccessStatusCode)
+                total.CancelAfter(ApiTimeoutMs);
+                try
                 {
-                    throw new UpdateException("GitHub API HTTP " + (int)resp.StatusCode);
+                    using (HttpResponseMessage resp = apiClient.GetAsync(ApiUrl,
+                        HttpCompletionOption.ResponseHeadersRead, total.Token).GetAwaiter().GetResult())
+                    {
+                        if (!resp.IsSuccessStatusCode)
+                        {
+                            throw new UpdateException("GitHub API HTTP " + (int)resp.StatusCode);
+                        }
+                        string json = resp.Content.ReadAsStringAsync(total.Token).GetAwaiter().GetResult();
+                        return ParseReleaseJson(json);
+                    }
                 }
-                string json = resp.Content.ReadAsStringAsync(ct).GetAwaiter().GetResult();
-                return ParseReleaseJson(json);
+                catch (OperationCanceledException)
+                {
+                    // Distinguish a real caller cancellation from our own
+                    // deadline, the same way the mirror loop does.
+                    if (ct.IsCancellationRequested) throw;
+                    throw new UpdateException(Loc.T("update.err.timeout"));
+                }
             }
         }
 
@@ -302,6 +323,26 @@ namespace WallpaperChanger
             TryDelete(part);
             DeleteOtherInstallers(destDir, name);
 
+            // Already downloaded and verified by an earlier attempt? Reuse it.
+            // The common path here is "installer started, the UAC prompt was
+            // declined" (1223): the card goes to Failed, the user presses
+            // 「重试」, and the old code downloaded all 66 MB again even though a
+            // digest-correct file was sitting on the disk.
+            if (File.Exists(final))
+            {
+                try
+                {
+                    if (DigestMatches(info.Digest, Sha256File(final)))
+                    {
+                        LastMirror = LastMirror == null ? "" : LastMirror;
+                        Log.Write("update: reusing verified installer " + final);
+                        return final;
+                    }
+                }
+                catch { }
+                TryDelete(final);
+            }
+
             List<string> errors = new List<string>();
             string[] candidates = CandidateUrls(info.AssetUrl);
             if (startIndex < 0) startIndex = 0;
@@ -319,7 +360,7 @@ namespace WallpaperChanger
                         errors.Add(label + ": no answer in " + (FirstByteTimeoutMs / 1000) + "s");
                         continue;
                     }
-                    DownloadOne(url, part, progress, ct);
+                    DownloadOne(url, part, progress, ct, info.AssetSize);
                     string actual = Sha256File(part);
                     if (!DigestMatches(info.Digest, actual))
                     {
@@ -385,7 +426,7 @@ namespace WallpaperChanger
         }
 
         private static void DownloadOne(string url, string partPath,
-            Action<long, long> progress, CancellationToken ct)
+            Action<long, long> progress, CancellationToken ct, long sizeLimit)
         {
             using (HttpResponseMessage resp = downloadClient.GetAsync(url,
                 HttpCompletionOption.ResponseHeadersRead, ct).GetAwaiter().GetResult())
@@ -396,6 +437,16 @@ namespace WallpaperChanger
                 }
                 long total = resp.Content.Headers.ContentLength.HasValue
                     ? resp.Content.Headers.ContentLength.Value : -1;
+                // The release metadata already states the asset size. Enforcing
+                // it here is the difference between "a hijacked mirror wastes
+                // our time" and "a hijacked mirror fills the system disk": the
+                // only limit used to be a 30 s idle timeout, so an endless
+                // stream kept the .part growing until the write failed.
+                if (sizeLimit > 0 && total > sizeLimit)
+                {
+                    throw new UpdateException("mirror announced " + total
+                        + " bytes, release says " + sizeLimit);
+                }
                 using (Stream stream = resp.Content.ReadAsStreamAsync(ct).GetAwaiter().GetResult())
                 using (FileStream fs = new FileStream(partPath, FileMode.Create,
                     FileAccess.Write, FileShare.None, 65536))
@@ -416,6 +467,11 @@ namespace WallpaperChanger
                                 idle.Token).GetAwaiter().GetResult();
                         }
                         if (n <= 0) break;
+                        if (sizeLimit > 0 && done + n > sizeLimit)
+                        {
+                            throw new UpdateException("mirror sent more than the "
+                                + sizeLimit + " bytes the release declares");
+                        }
                         fs.Write(buffer, 0, n);
                         done += n;
                         if (progress != null) progress(done, total);

@@ -239,7 +239,12 @@ namespace WallpaperChanger
                 if (single.TryGetValue("interval_minutes", out v))
                 {
                     int n;
-                    if (int.TryParse(v, out n) && n > 0) IntervalMinutes = n;
+                    // Upper bound matters: the timer does IntervalMinutes * 60000
+                    // in an int, so anything above 35791 minutes overflows to a
+                    // negative value and Timer.Interval throws in the
+                    // constructor - the app died on launch with no window and no
+                    // explanation. One year is a generous ceiling.
+                    if (int.TryParse(v, out n) && n > 0) IntervalMinutes = Math.Min(n, 525600);
                 }
                 if (single.TryGetValue("style", out v))
                 {

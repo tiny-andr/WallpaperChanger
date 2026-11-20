@@ -200,6 +200,13 @@ namespace WallpaperChanger
         {
             base.OnScroll(se);
             Invalidate();
+            // The decode queue now only covers the visible window, so scrolling
+            // has to ask for the rows it just brought in.
+            if (paths.Count > 0 && !Disposing)
+            {
+                PrimeDecodeQueue();
+                DispatchDecoder();
+            }
         }
 
         protected override void OnResize(EventArgs e)
@@ -265,28 +272,44 @@ namespace WallpaperChanger
             return n < 1 ? 1 : n;
         }
 
-        // Refill the queue with everything not already cached or in flight.
-        // Callers follow up with DispatchDecoder(); this method itself only
-        // touches queue state and must run on the UI thread.
+        // Refill the queue with what is worth decoding now: the visible rows plus
+        // one screen either side. Callers follow up with DispatchDecoder(); this
+        // method itself only touches queue state and must run on the UI thread.
+        //
+        // It used to enqueue the WHOLE library, so opening the picker on a folder
+        // of 2000 pictures decoded 2000 thumbnails at four at a time: minutes of
+        // disk reads and CPU, and 0.3-0.7 GB of bitmaps held until the modal
+        // closed. The class comment already claimed "only the visible area is
+        // rendered" - now the decode side matches it. Scrolling and filtered
+        // views refill through the same path.
         private void PrimeDecodeQueue()
         {
             if (paths.Count == 0) return;
             decodeQueue.Clear();
-            // Visible rows first so the first screen fills fast.
-            int firstVisible = VisibleRowStart();
-            List<string> ordered = new List<string>();
             int total = paths.Count;
-            int from = Math.Max(0, firstVisible - 1);
-            for (int step = 0; step < total; step++)
+            int perRow = Math.Max(1, cols);
+            int firstRow = VisibleRowStart();
+            // One screen of slack above and below: a wheel notch usually lands
+            // inside what is already queued.
+            int fromRow = Math.Max(0, firstRow - 1);
+            int toRow = Math.Min(Math.Max(0, rows - 1), firstRow + VisibleRowCount());
+            int from = fromRow * perRow;
+            int to = Math.Min(total - 1, (toRow + 1) * perRow - 1);
+            for (int idx = from; idx <= to && idx < total; idx++)
             {
-                int idx = (from + step) % total;
-                ordered.Add(paths[idx]);
-            }
-            foreach (string p in ordered)
-            {
+                string p = paths[idx];
                 if (!thumbCache.ContainsKey(p) && !decoding.Contains(p))
                     decodeQueue.Enqueue(p);
             }
+        }
+
+        // How many rows fit in the viewport right now (at least one).
+        private int VisibleRowCount()
+        {
+            int rowH = Math.Max(1, cellImgH + cellLabelH + spacing);
+            int h = ClientSize.Height - spacing;
+            int n = h / rowH;
+            return Math.Max(1, n);
         }
 
         // Ask for a drain. Safe from any thread: the marshal hop makes the

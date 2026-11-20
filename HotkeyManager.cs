@@ -46,11 +46,20 @@ namespace WallpaperChanger
 
         // (Re)register both hotkeys from config values (-1 = disabled).
         // Returns null on success, otherwise a human-readable problem.
+        //
+        // The old version called Unregister() FIRST and validated afterwards, so
+        // every rejected attempt also destroyed the binding that was working:
+        // picking a digit another program already owns, or picking the same digit
+        // for both actions, silently left the user with no hotkeys at all - and
+        // because the caller had already written the bad digit to the ini, the
+        // next launch failed the same way. Now the new bindings are taken while
+        // the old ones are still held, the stale ids are only dropped once both
+        // new ones are in place, and a failure restores the previous pair.
         public string Set(int next, int prev)
         {
             Log.Write("hotkey: Set(" + next + ", " + prev + ") handle=" + owner.Handle
                 + " created=" + owner.IsHandleCreated);
-            Unregister();
+
             if (next >= 0 && next <= 9 && next == prev)
             {
                 string msg = Loc.F("hotkey.err.same", next);
@@ -59,27 +68,78 @@ namespace WallpaperChanger
             }
 
             string problem = null;
+            bool nextBound = false;
+            bool prevBound = false;
             if (next >= 0 && next <= 9)
             {
-                if (!RegisterOne(ID_NEXT_MAIN + next, ID_NEXT_PAD + next, next))
-                    problem = Loc.F("hotkey.err.next", next);
+                nextBound = RegisterOne(ID_NEXT_MAIN + next, ID_NEXT_PAD + next, next);
+                if (!nextBound) problem = Loc.F("hotkey.err.next", next);
             }
             if (prev >= 0 && prev <= 9)
             {
-                if (!RegisterOne(ID_PREV_MAIN + prev, ID_PREV_PAD + prev, prev))
+                prevBound = RegisterOne(ID_PREV_MAIN + prev, ID_PREV_PAD + prev, prev);
+                if (!prevBound)
+                {
                     problem = (problem == null ? "" : problem + Loc.T("hotkey.err.join")) +
                               Loc.F("hotkey.err.prev", prev);
+                }
             }
 
-            nextDigit = next;
-            prevDigit = prev;
             if (problem != null)
             {
-                Log.Write("hotkey: " + problem);
+                // Roll back whatever of the new pair did register and put the
+                // previous pair back, so a rejected change is a no-op.
+                ReleasePair(next, nextBound, prev, prevBound);
+                Rebind(nextDigit, prevDigit);
+                Log.Write("hotkey: " + problem + " (rolled back to "
+                    + nextDigit + "/" + prevDigit + ")");
                 return problem;
             }
+
+            // Success: drop the old bindings the new digits no longer cover.
+            ReleaseStale(next, prev);
+            nextDigit = next;
+            prevDigit = prev;
             Log.Write("hotkey: next=" + next + ", prev=" + prev);
             return null;
+        }
+
+        // Frees the ids of a candidate pair that was taken but is being abandoned.
+        private void ReleasePair(int next, bool nextBound, int prev, bool prevBound)
+        {
+            if (nextBound) ReleaseIds(next, ID_NEXT_MAIN, ID_NEXT_PAD);
+            if (prevBound) ReleaseIds(prev, ID_PREV_MAIN, ID_PREV_PAD);
+        }
+
+        // Frees the previously held ids for the actions whose digit just changed.
+        private void ReleaseStale(int next, int prev)
+        {
+            if (nextDigit >= 0 && nextDigit != next) ReleaseIds(nextDigit, ID_NEXT_MAIN, ID_NEXT_PAD);
+            if (prevDigit >= 0 && prevDigit != prev) ReleaseIds(prevDigit, ID_PREV_MAIN, ID_PREV_PAD);
+        }
+
+        private void ReleaseIds(int digit, int idMainBase, int idPadBase)
+        {
+            if (digit < 0 || digit > 9) return;
+            try
+            {
+                UnregisterHotKey(owner.Handle, idMainBase + digit);
+                UnregisterHotKey(owner.Handle, idPadBase + digit);
+            }
+            catch { }
+        }
+
+        // Best-effort re-registration of the previous pair (rollback path).
+        // A failure here leaves the action unbound and logged rather than
+        // throwing out of a UI callback.
+        private void Rebind(int next, int prev)
+        {
+            try
+            {
+                if (next >= 0 && next <= 9) RegisterOne(ID_NEXT_MAIN + next, ID_NEXT_PAD + next, next);
+                if (prev >= 0 && prev <= 9) RegisterOne(ID_PREV_MAIN + prev, ID_PREV_PAD + prev, prev);
+            }
+            catch { }
         }
 
         // digit: -1 = disabled, 0-9 = Ctrl+digit. Registers BOTH the main

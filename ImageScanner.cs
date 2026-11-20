@@ -24,7 +24,19 @@ namespace WallpaperChanger
 
             try
             {
-                SearchOption opt = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+                // EnumerationOptions instead of SearchOption: the source tree is
+                // not guaranteed to be a tree. A junction or a symlink back up
+                // the hierarchy (a source pointing at a whole drive, at
+                // C:\Users, or at a cloud-mount point that links into itself)
+                // made AllDirectories walk in circles - a switch that used to
+                // take milliseconds ended up in the minutes, with no message
+                // saying which source was responsible. Skipping reparse points
+                // also keeps OneDrive placeholders out of the scan.
+                EnumerationOptions opt = new EnumerationOptions();
+                opt.RecurseSubdirectories = recursive;
+                opt.AttributesToSkip = FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint;
+                opt.IgnoreInaccessible = true;
+                opt.ReturnSpecialDirectories = false;
                 foreach (string file in Directory.EnumerateFiles(root, "*", opt))
                 {
                     try

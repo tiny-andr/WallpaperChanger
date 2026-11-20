@@ -199,7 +199,12 @@ namespace WallpaperChanger
             // This is a DESIGN size; at runtime the window is scaled by the DPI
             // it lands on (see Theme.WindowW and Gfx.S).
             Size = new Size(Theme.WindowW, Theme.WindowH);
-            MinimumSize = new Size(Theme.WindowMinW, Theme.WindowMinH);
+            // MinimumSize is in physical pixels, the constants are design pixels,
+            // so it has to go through the same scale as everything else. Passing
+            // the design number raw made the floor 653x413 design pixels at 150%,
+            // which is why a window that had been clamped on a small screen could
+            // never grow back.
+            MinimumSize = ScaledMinimumSize();
             // No Padding: the shell has to start at (0,0) like the design's, or
             // the whole window sits 6px in from its own edge. Edge resizing does
             // not need a reserved band either - WM_NCHITTEST hands the outer
@@ -750,15 +755,10 @@ namespace WallpaperChanger
             keyNext.CaptureText = Loc.T("rot.keycap.capture");
             keyNext.Captured += delegate
             {
-                Config.Hotkey = keyNext.Value;
-                Config.Save();
-                // Show the binding that was just stored, from the config, in
-                // the same turn as the click. The report was "the key does not
-                // appear until I leave the page and come back", i.e. the button
-                // was left showing the capture prompt.
-                if (keyNext.Value >= 0) keyNext.Value = Config.Hotkey;
-                keyNext.Invalidate();
-                ApplyHotkey();
+                // Register first, persist only if Windows accepted it (see
+                // CommitHotkey): saving first meant an unusable binding was
+                // written to the ini and replayed on every launch.
+                CommitHotkey(keyNext.Value, Config.HotkeyPrev);
             };
 
             cardHk.AddChild(new Rule(), 0, 50, 684, 1);
@@ -770,11 +770,7 @@ namespace WallpaperChanger
             keyPrev.CaptureText = Loc.T("rot.keycap.capture");
             keyPrev.Captured += delegate
             {
-                Config.HotkeyPrev = keyPrev.Value;
-                Config.Save();
-                if (keyPrev.Value >= 0) keyPrev.Value = Config.HotkeyPrev;
-                keyPrev.Invalidate();
-                ApplyHotkey();
+                CommitHotkey(Config.Hotkey, keyPrev.Value);
             };
 
             CardPanel cardCfg = CardText(page.AddCard(156), "gen.config.title", null);
@@ -1927,6 +1923,53 @@ namespace WallpaperChanger
             if (problem != null) SetStatus(problem);
         }
 
+        // Register the pair the user just picked, and only then remember it.
+        // The old flow saved first and registered after, so a binding Windows
+        // refused (already owned by another program, or the same digit used for
+        // both actions) was persisted anyway: the failure showed for eight
+        // seconds in the footer and every later launch reproduced it, with the
+        // working binding already gone. On failure the previous digits are put
+        // back in the config and in the ini, so the click is a no-op.
+        private void CommitHotkey(int next, int prev)
+        {
+            int oldNext = Config.Hotkey;
+            int oldPrev = Config.HotkeyPrev;
+            Config.Hotkey = next;
+            Config.HotkeyPrev = prev;
+            string problem = hotkeyManager == null || !IsHandleCreated
+                ? null
+                : hotkeyManager.Set(next, prev);
+            if (problem == null)
+            {
+                Config.Save();
+                RefreshHotkeyButtons();
+                return;
+            }
+            Config.Hotkey = oldNext;
+            Config.HotkeyPrev = oldPrev;
+            hotkeyManager.Set(oldNext, oldPrev);
+            Config.Save();
+            RefreshHotkeyButtons();
+            SetStatus(problem);
+        }
+
+        // The key buttons read their label from Config, so a rejected change has
+        // to be reflected back into them or they keep showing the digit that was
+        // never bound.
+        private void RefreshHotkeyButtons()
+        {
+            if (keyNext != null)
+            {
+                keyNext.Value = Config.Hotkey;
+                keyNext.Invalidate();
+            }
+            if (keyPrev != null)
+            {
+                keyPrev.Value = Config.HotkeyPrev;
+                keyPrev.Invalidate();
+            }
+        }
+
         private void RestartTimer()
         {
             rotateTimer.Stop();
@@ -2044,7 +2087,7 @@ namespace WallpaperChanger
         // wallpaper they stepped away from instead of jumping to a new pick.
         private void NextWallpaper()
         {
-            if (busy) return;
+            if (busy) { ReportBusy(); return; }
             if (!HasValidFolders())
             {
                 SetStatus(delegate { return Loc.T("status.novalidfolder"); });
@@ -2067,7 +2110,7 @@ namespace WallpaperChanger
         // stale "forward" entry can never pop back up later by surprise.
         private void AutoRotate()
         {
-            if (busy) return;
+            if (busy) return;   // a tick during an in-flight switch is simply skipped
             if (!HasValidFolders()) return;
             busy = true;
             StartFreshPickTask();
@@ -2163,7 +2206,14 @@ namespace WallpaperChanger
                 }
                 else
                 {
-                    busy = false;
+                    // Nothing to switch to (a pool of one). Say so instead of
+                    // resetting busy in silence: before this the timer tick just
+                    // did nothing visible and "下一张" looked broken.
+                    SafeUi(delegate
+                    {
+                        try { SetStatus(delegate { return Loc.T("status.nothingnext"); }); }
+                        finally { busy = false; }
+                    });
                 }
             });
         }
@@ -2231,6 +2281,7 @@ namespace WallpaperChanger
                 {
                     Log.Write("applied: " + path);
                     PushHistory(path);
+                    lastApplied = path;
                     RememberApplied(path);
                     lastTotal = total;
                     string n3 = Path.GetFileName(path); int t3 = total;
@@ -2238,6 +2289,10 @@ namespace WallpaperChanger
                 }
                 else
                 {
+                    // The cursor was never moved for this pick (PickNext does not
+                    // write lastApplied any more), so there is nothing to roll
+                    // back - the next attempt walks on from whatever is actually
+                    // on screen.
                     Log.Write("apply failed: " + path);
                     string n4 = Path.GetFileName(path);
                     SetStatus(delegate { return Loc.F("status.applyfail", n4); });
@@ -2253,6 +2308,16 @@ namespace WallpaperChanger
             {
                 busy = false;
             }
+        }
+
+        // A click that lands while a switch is still running used to be dropped
+        // with a bare "return": no status, no greying out, nothing. A switch
+        // takes 2-5 s, and a slow/unreachable source stretches the scan in front
+        // of it to tens of seconds, so users read the silence as "it froze" and
+        // killed the process before the pending settings were ever saved.
+        private void ReportBusy()
+        {
+            SetStatus(delegate { return Loc.T("status.busy"); });
         }
 
         private string PickNext(List<string> imgs)
@@ -2286,7 +2351,12 @@ namespace WallpaperChanger
                 }
                 string p = workList[workIndex];
                 workIndex = (workIndex + 1) % workList.Count;
-                lastApplied = p;
+                // Deliberately NOT writing lastApplied here: this runs on the
+                // worker thread BEFORE the wallpaper is written, so a failed
+                // apply would leave the cursor sitting on a picture that never
+                // reached the screen (the order mode then "skips one" each time
+                // it happens, and a restart resumes from the wrong place).
+                // FinishApply commits it once the desktop really changed.
                 return p;
             }
             else
@@ -2299,9 +2369,7 @@ namespace WallpaperChanger
                 // start from the first entry when that wallpaper has left the
                 // pool - or on the first pick after a restart.
                 List<string> ordered = SortByModTime(imgs, Config.RotateOrder == 1);
-                string p = NextInOrder(ordered, lastApplied);
-                lastApplied = p;
-                return p;
+                return NextInOrder(ordered, lastApplied);
             }
         }
 
@@ -2352,6 +2420,12 @@ namespace WallpaperChanger
         internal static string NextInOrder(List<string> ordered, string lastApplied)
         {
             if (ordered == null || ordered.Count == 0) return null;
+            // A pool of one has nowhere to go: (0 + 1) % 1 == 0 returned the same
+            // file, so every timer tick re-applied the wallpaper that was already
+            // on screen - a 2-5 s SPI write plus a full WM_SETTINGCHANGE broadcast
+            // per interval, and the desktop visibly flashed. Nothing to do means
+            // nothing to do.
+            if (ordered.Count == 1) return null;
             if (lastApplied != null)
             {
                 for (int i = 0; i < ordered.Count; i++)
@@ -2558,7 +2632,7 @@ namespace WallpaperChanger
         // still redo-restores it); going forward consumes that stack.
         private void JumpToTimeline(int target)
         {
-            if (busy) return;
+            if (busy) { ReportBusy(); return; }
             List<string> t = Timeline();
             int cur = history.Count - 1;
             if (target < 0 || target >= t.Count || target == cur) return;
@@ -2617,7 +2691,7 @@ namespace WallpaperChanger
         // fresh picks.
         private void PrevWallpaper()
         {
-            if (busy) return;
+            if (busy) { ReportBusy(); return; }
             if (history.Count < 2)
             {
                 SetStatus(delegate { return Loc.T("status.noprev"); });
@@ -2653,6 +2727,14 @@ namespace WallpaperChanger
                             string departed = history[history.Count - 1];
                             history.RemoveAt(history.Count - 1);   // drop the current entry
                             PushForward(departed);
+                            // Same bookkeeping the other two success paths do
+                            // (FinishApply, JumpToTimeline): without it the ini
+                            // kept pointing at the wallpaper the user stepped
+                            // away FROM, so a restart resumed the sequence in the
+                            // wrong place - stepping back three times and
+                            // restarting landed three positions ahead.
+                            lastApplied = target;
+                            RememberApplied(target);
                             Log.Write("previous: " + target);
                             string n5 = name;
                             SetStatus(delegate { return Loc.F("status.current.prev", n5) + ModeTag(); });
@@ -2859,6 +2941,16 @@ namespace WallpaperChanger
             base.OnFormClosing(e);
         }
 
+        // Physical-pixel floor for the window, scaled from the design constants.
+        // MinimumSize is physical, Theme.WindowMinW/H are design pixels.
+        private Size ScaledMinimumSize()
+        {
+            int dpi = DeviceDpi > 0 ? DeviceDpi : 96;
+            return new Size(
+                (int)Math.Round(Theme.WindowMinW * dpi / 96.0),
+                (int)Math.Round(Theme.WindowMinH * dpi / 96.0));
+        }
+
         // Persist the size in 96-DPI logical units. The raw pixels of a 150%
         // monitor would reopen far too large on a 100% one. A maximised or
         // minimised window is not a size the user chose, so it is ignored and
@@ -2870,6 +2962,17 @@ namespace WallpaperChanger
             int w = (int)Math.Round(Width * 96.0 / dpi);
             int h = (int)Math.Round(Height * 96.0 / dpi);
             if (w <= 0 || h <= 0) return;
+            // Only remember a size the user actually settled on. When the screen
+            // was too small the window got clamped to the work area (see
+            // ApplySavedWindowSize), and storing that clamp treated the limit of
+            // a small monitor as a preference: run once on a 1366x768 laptop and
+            // the window came back undersized on a 1920x1080 screen too, with no
+            // way to undo it (the window is not resizable and has no "reset
+            // size" command).
+            Rectangle wa = Screen.FromControl(this).WorkingArea;
+            int designH = (int)Math.Round(Theme.WindowH * dpi / 96.0);
+            int designW = (int)Math.Round(Theme.WindowW * dpi / 96.0);
+            if (designH > wa.Height || designW > wa.Width) return;
             Config.WindowWidth = w;
             Config.WindowHeight = h;
         }
@@ -2931,7 +3034,7 @@ namespace WallpaperChanger
             wanted.Width = Math.Min(wanted.Width, wa.Width);
             wanted.Height = Math.Min(wanted.Height, wa.Height);
             if (Size != wanted) Size = wanted;
-            MinimumSize = new Size(Theme.WindowMinW, Theme.WindowMinH);
+            MinimumSize = ScaledMinimumSize();
 
             LayoutChrome();
             if (bar != null) bar.SyncWindowState(WindowState);
@@ -3292,7 +3395,14 @@ namespace WallpaperChanger
             {
                 if (hotkeyManager != null) hotkeyManager.Dispose();
                 if (notifyIcon != null) notifyIcon.Dispose();
-                if (rotateTimer != null) rotateTimer.Dispose();
+                // All three timers, not just the rotation one: uiTick and
+                // noticeTimer hold `this` through their anonymous delegates, so
+                // an undisposed one keeps firing into already-disposed controls
+                // (ObjectDisposedException, swallowed into the log).
+                if (rotateTimer != null) { rotateTimer.Stop(); rotateTimer.Dispose(); }
+                if (uiTick != null) { uiTick.Stop(); uiTick.Dispose(); }
+                if (noticeTimer != null) { noticeTimer.Stop(); noticeTimer.Dispose(); }
+                if (trayMenu != null) trayMenu.Dispose();
                 if (updateCts != null)
                 {
                     try { updateCts.Cancel(); updateCts.Dispose(); } catch { }

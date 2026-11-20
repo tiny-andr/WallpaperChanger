@@ -26,6 +26,7 @@ AGENTS.local.md
 # temporary files: UI-driving harnesses, release notes, push logs
 .tmp-*/
 .tmp-*
+tmp/
 
 # design handoff (prototype + assets from the design tool, not shipped)
 design/

@@ -386,9 +386,54 @@ namespace WallpaperChanger
         private string note = "";
         private int pad = Theme.CardPad;
 
-        public string Title { get { return title; } set { title = value ?? ""; Invalidate(); } }
-        public string Note { get { return note; } set { note = value ?? ""; Invalidate(); } }
+        public string Title
+        {
+            get { return title; }
+            set
+            {
+                string next = value ?? "";
+                if (next == title) return;
+                title = next;
+                Invalidate();
+                HeaderTextChanged();
+            }
+        }
+
+        public string Note
+        {
+            get { return note; }
+            set
+            {
+                string next = value ?? "";
+                if (next == note) return;
+                note = next;
+                Invalidate();
+                HeaderTextChanged();
+            }
+        }
+
         public int Pad { get { return pad; } set { pad = value; Invalidate(); } }
+
+        // Title and note wrap, so changing their text changes HeaderPx, which
+        // moves Body - i.e. the coordinates every placed child is built from.
+        // Repainting alone left those children where the PREVIOUS text put them:
+        // switching the UI language (or the source summary going from one line
+        // to two) drew the note's second line straight over the row underneath,
+        // and the card kept its old height, clipping its own last button. The
+        // text has to ask for a relayout, not just a repaint.
+        //
+        // Guarded against re-entry: Relayout runs ApplyPlacements, which can
+        // resize children, which can bubble back into a header text set.
+        private void HeaderTextChanged()
+        {
+            if (!IsHandleCreated || headerRelayouting) return;
+            headerRelayouting = true;
+            try { Relayout(); }
+            catch { }
+            finally { headerRelayouting = false; }
+        }
+
+        private bool headerRelayouting;
 
         // .card pads 18px all round, but the overview strip is its own rule:
         // ".strip{ padding:13px 16px }" - 5px less vertically, 2px less
@@ -535,7 +580,24 @@ namespace WallpaperChanger
         // Design-pixel width the header controls occupy on the right. The note
         // under the title is measured against the space that is left, so a long
         // note wraps instead of running under the buttons. 0 = no reservation.
-        public int HeaderReservedWidth;
+        //
+        // A property rather than a field: this value feeds NotePx, so changing
+        // it changes whether the note wraps and therefore how tall the header
+        // is. Assigning it as a bare field was silent - the card kept painting
+        // against the old wrapping.
+        public int HeaderReservedWidth
+        {
+            get { return headerReservedWidth; }
+            set
+            {
+                if (value == headerReservedWidth) return;
+                headerReservedWidth = value;
+                Invalidate();
+                HeaderTextChanged();
+            }
+        }
+
+        private int headerReservedWidth;
 
         public void ApplyPlacements()
         {
@@ -2897,7 +2959,22 @@ namespace WallpaperChanger
         // for the click mapping - but the tiles show only the pictures.
         public void SetRows(string[] displayNames, string[] displayMetas, Image[] displayThumbs, int current)
         {
+            // ThumbCache.Get hands out a NEW Bitmap on every call, so replacing
+            // the array without disposing the old one leaked five 264x148 bitmaps
+            // per history rebuild - i.e. per wallpaper switch, on a tray app that
+            // runs for weeks. Only images this control owns are disposed: a caller
+            // that passes the same instance twice still survives because the old
+            // array is replaced wholesale.
+            Image[] previous = thumbs;
             thumbs = displayThumbs ?? new Image[0];
+            if (previous != null && !ReferenceEquals(previous, thumbs))
+            {
+                foreach (Image img in previous)
+                {
+                    if (img == null) continue;
+                    try { img.Dispose(); } catch { }
+                }
+            }
             currentIndex = current;
             hotIndex = -1;
             Relayout();

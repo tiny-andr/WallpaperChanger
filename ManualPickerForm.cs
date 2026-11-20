@@ -33,6 +33,7 @@ namespace WallpaperChanger
         private Label lblBottomHint;
         private Button btnDisableAll;
         private Button btnSave;
+        private Button escButton;   // invisible Esc target; see the constructor
         private ToolTip toolTip;
 
         private readonly List<string> allPaths = new List<string>();
@@ -110,7 +111,17 @@ namespace WallpaperChanger
             catch { }
 
             BuildChrome();
-            CancelButton = btnSave;
+            // NOT btnSave: CancelButton is what Esc triggers, and SaveAndClose
+            // sets closing = true, which skips ConfirmCloseAllowed() - so Esc
+            // committed whatever the user had toggled by accident instead of
+            // asking. An invisible button leaves Esc to the normal close path,
+            // which does ask when there are unsaved changes.
+            escButton = new Button();
+            escButton.Visible = false;
+            escButton.DialogResult = DialogResult.None;
+            escButton.Click += delegate { Close(); };
+            Controls.Add(escButton);
+            CancelButton = escButton;
             Theme.ApplyTo(this);
         }
 
