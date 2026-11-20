@@ -10,6 +10,9 @@ installer/*.exe.manifest
 # runtime artifacts
 *.log
 WallpaperChanger.ini
+# atomic-save side files (Config.WriteAtomic)
+WallpaperChanger.ini.bak
+WallpaperChanger.ini.tmp
 
 # IDE
 .vs/

@@ -91,6 +91,13 @@ namespace WallpaperChanger
                 sw = System.Diagnostics.Stopwatch.StartNew();
             }
 
+            // Snapshot BEFORE the first call. The transcoded file's stamp only
+            // proves anything when it is compared against a value taken before
+            // the write: the old check asked "was this file written in the last
+            // 8 seconds", which any other program touching it satisfies and
+            // which says nothing about THIS call.
+            DateTime baseline = TranscodeStamp();
+
             try
             {
                 // The legacy call first: it is the one that actually repaints
@@ -99,10 +106,10 @@ namespace WallpaperChanger
                 {
                     NotifySettingChange();
                     Mark(trace, sw, "notify");
-                    PersistStyleRegistry(style);
+                    if (!PersistStyleRegistry(style)) Mark(trace, sw, "reg:FAILED");
                     Mark(trace, sw, "reg");
                     ApplyViaSystemParameters(imagePath, trace, sw);
-                    if (DesktopMatches(imagePath))
+                    if (DesktopAdvanced(baseline))
                     {
                         Mark(trace, sw, "spi:ok");
                         Finish(trace);
@@ -114,10 +121,13 @@ namespace WallpaperChanger
                 IDesktopWallpaper dw = CreateDesktopWallpaper();
                 if (dw == null)
                 {
+                    // No COM at all: the legacy call is all that ran, so ask the
+                    // verifier rather than announcing success unconditionally.
                     FallbackApply(imagePath, style, trace, sw);
                     Mark(trace, sw, "fallback");
+                    bool okNoCom = VerifyApplied(imagePath, baseline, trace, sw);
                     Finish(trace);
-                    return true;
+                    return okNoCom;
                 }
                 Mark(trace, sw, "com");
 
@@ -158,7 +168,7 @@ namespace WallpaperChanger
                     }
                 }
 
-                PersistStyleRegistry(style);
+                if (!PersistStyleRegistry(style)) Mark(trace, sw, "reg2:FAILED");
                 Mark(trace, sw, "reg2");
 
                 // Only Span lands here on a healthy machine, so this read-back
@@ -171,8 +181,13 @@ namespace WallpaperChanger
                     FallbackApply(imagePath, style, trace, sw);
                 }
 
+                // The read-back being right is not enough on its own (the header
+                // comment records a case where the API reported the new path
+                // while the screen still showed the old picture), so the desktop
+                // itself gets the final word.
+                bool ok = VerifyApplied(imagePath, baseline, trace, sw);
                 Finish(trace);
-                return true;
+                return ok;
             }
             catch (Exception ex)
             {
@@ -192,8 +207,9 @@ namespace WallpaperChanger
                 {
                     FallbackApply(imagePath, style, trace, sw);
                     Mark(trace, sw, "fallback");
+                    bool okCatch = VerifyApplied(imagePath, baseline, trace, sw);
                     Finish(trace);
-                    return true;
+                    return okCatch;
                 }
                 catch (Exception ex2)
                 {
@@ -202,6 +218,69 @@ namespace WallpaperChanger
                     return false;
                 }
             }
+        }
+
+        // True when the desktop really shows this image. This is the only place
+        // allowed to answer "did the apply work": it combines the two honest
+        // signals available from inside the process (the shell's own read-back
+        // of the path, and the transcoded file the shell rewrites on a genuine
+        // repaint) with the baseline captured before the write.
+        private static bool VerifyApplied(string imagePath, DateTime baseline,
+            List<string> trace, System.Diagnostics.Stopwatch sw)
+        {
+            if (DesktopAdvanced(baseline))
+            {
+                Mark(trace, sw, "verify:transcoded");
+                return true;
+            }
+
+            IDesktopWallpaper dw = CreateDesktopWallpaper();
+            if (dw != null)
+            {
+                try
+                {
+                    string shown = ReadBackWallpaper(dw);
+                    Mark(trace, sw, "verify:readback=" +
+                        (string.IsNullOrEmpty(shown) ? "<empty>" : System.IO.Path.GetFileName(shown)));
+                    if (SameFile(shown, imagePath))
+                    {
+                        Mark(trace, sw, "verify:path");
+                        return true;
+                    }
+                }
+                catch { }
+                // A per-monitor read-back only covers monitor 0; on a multi-monitor
+                // Span setup it can disagree while the desktop is in fact correct.
+                try
+                {
+                    if (AllMonitorsShow(dw, imagePath))
+                    {
+                        Mark(trace, sw, "verify:allmonitors");
+                        return true;
+                    }
+                }
+                catch { }
+            }
+
+            Mark(trace, sw, "verify:failed");
+            return false;
+        }
+
+        private static bool AllMonitorsShow(IDesktopWallpaper dw, string imagePath)
+        {
+            uint count;
+            dw.GetMonitorDevicePathCount(out count);
+            if (count == 0) return SameFile(dw.GetWallpaper(""), imagePath);
+            for (uint i = 0; i < count; i++)
+            {
+                IntPtr idPtr;
+                dw.GetMonitorDevicePathAt(i, out idPtr);
+                string id = Marshal.PtrToStringUni(idPtr);
+                Marshal.FreeCoTaskMem(idPtr);
+                if (string.IsNullOrEmpty(id)) continue;
+                if (!SameFile(dw.GetWallpaper(id), imagePath)) return false;
+            }
+            return true;
         }
 
         // A diagnostic hook: when set, Apply() records how long each phase took
@@ -316,7 +395,7 @@ namespace WallpaperChanger
         private static void FallbackApply(string imagePath, WallpaperStyle style,
             List<string> trace, System.Diagnostics.Stopwatch sw)
         {
-            PersistStyleRegistry(style);
+            if (!PersistStyleRegistry(style)) Mark(trace, sw, "reg:FAILED");
             Mark(trace, sw, "reg");
             ApplyViaSystemParameters(imagePath, trace, sw);
             NotifyShell();
@@ -326,25 +405,52 @@ namespace WallpaperChanger
         // What the DESKTOP says, not what the API says: the transcoded file the
         // shell writes when the wallpaper really changes. A SetWallpaper that
         // returns S_OK without repainting leaves this file's content alone, so
-        // comparing its hash before and after is the only honest check available
-        // from inside the process. Used to confirm the legacy call took effect.
-        private static bool DesktopMatches(string imagePath)
+        // its timestamp is the only honest check available from inside the
+        // process.
+        //
+        // The comparison is against a baseline taken BEFORE the write. The
+        // earlier version of this check compared the stamp against "now minus 8
+        // seconds", which is true for anything that touched the file recently -
+        // including another wallpaper program, or an earlier apply in the same
+        // rotation tick - so it reported success for writes that never landed.
+        private static DateTime TranscodeStamp()
         {
             try
             {
-                string tp = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "Microsoft", "Windows", "Themes", "TranscodedWallpaper");
-                if (!System.IO.File.Exists(tp)) return true;   // nothing to compare
-                DateTime stamp = System.IO.File.GetLastWriteTimeUtc(tp);
-                // The shell writes it synchronously for SPI; a stamp from before
-                // this call means the desktop did not react.
-                return stamp >= DateTime.UtcNow.AddSeconds(-8);
+                string tp = TranscodePath();
+                if (tp == null || !System.IO.File.Exists(tp)) return DateTime.MinValue;
+                return System.IO.File.GetLastWriteTimeUtc(tp);
             }
             catch
             {
-                return true;
+                return DateTime.MinValue;
             }
+        }
+
+        // True when the shell rewrote the transcoded file after the baseline.
+        // DateTime.MinValue means "there was no file", and then any existing
+        // stamp counts as an advance (the shell created it, which only happens
+        // on a genuine repaint).
+        private static bool DesktopAdvanced(DateTime baseline)
+        {
+            try
+            {
+                string tp = TranscodePath();
+                if (tp == null || !System.IO.File.Exists(tp)) return false;
+                DateTime stamp = System.IO.File.GetLastWriteTimeUtc(tp);
+                return stamp > baseline;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static string TranscodePath()
+        {
+            return System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Microsoft", "Windows", "Themes", "TranscodedWallpaper");
         }
 
         // Read the current wallpaper path on every monitor (raw file path,
@@ -385,12 +491,19 @@ namespace WallpaperChanger
         }
 
         // Persist the style so it survives a reboot.
-        private static void PersistStyleRegistry(WallpaperStyle style)
+        //
+        // Returns false when the write did not happen, so the caller can tell
+        // "the style is stored" from "we silently failed to store it" (a policy
+        // or a security product can lock Control Panel\Desktop). The key is
+        // closed on the failure paths too - it used to leak the handle whenever
+        // SetValue threw.
+        private static bool PersistStyleRegistry(WallpaperStyle style)
         {
+            RegistryKey key = null;
             try
             {
-                RegistryKey key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", true);
-                if (key == null) return;
+                key = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", true);
+                if (key == null) return false;
                 int wallpaperStyle;
                 int tile;
                 switch (style)
@@ -404,10 +517,15 @@ namespace WallpaperChanger
                 }
                 key.SetValue("WallpaperStyle", wallpaperStyle.ToString(), RegistryValueKind.String);
                 key.SetValue("TileWallpaper", tile.ToString(), RegistryValueKind.String);
-                key.Close();
+                return true;
             }
             catch
             {
+                return false;
+            }
+            finally
+            {
+                if (key != null) { try { key.Close(); } catch { } }
             }
         }
 

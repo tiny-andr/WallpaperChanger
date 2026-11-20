@@ -320,7 +320,16 @@ namespace WallpaperChanger
             }
         }
 
-        public static void Save()
+        // Returns false when the file could not be written. Callers that show a
+        // "saved" message must check it: the old version swallowed every
+        // failure, so a read-only data directory or a full disk produced a
+        // confident "已保存" and settings that were simply gone next launch.
+        //
+        // The write itself is atomic: a sibling .tmp is written and then
+        // swapped in with File.Replace, keeping one .bak. File.WriteAllText on
+        // the real file truncates it to zero bytes first, so a failure halfway
+        // through destroyed the previous settings instead of leaving them.
+        public static bool Save()
         {
             try
             {
@@ -362,10 +371,47 @@ namespace WallpaperChanger
                 {
                     sb.AppendLine("window_size=" + WindowWidth + "x" + WindowHeight);
                 }
-                File.WriteAllText(ConfigPath, sb.ToString(), new UTF8Encoding(false));
+                return WriteAtomic(sb.ToString());
             }
             catch
             {
+                return false;
+            }
+        }
+
+        private static bool WriteAtomic(string text)
+        {
+            string final = ConfigPath;
+            string temp = final + ".tmp";
+            string backup = final + ".bak";
+            try
+            {
+                File.WriteAllText(temp, text, new UTF8Encoding(false));
+                if (File.Exists(final))
+                {
+                    // File.Replace is atomic and keeps the previous contents in
+                    // backup. Not supported on every volume (e.g. some network
+                    // shares), so fall back to a plain move below.
+                    try
+                    {
+                        File.Replace(temp, final, backup);
+                        return true;
+                    }
+                    catch (PlatformNotSupportedException)
+                    {
+                    }
+                    catch (IOException)
+                    {
+                    }
+                }
+                File.Copy(temp, final, true);
+                try { File.Delete(temp); } catch { }
+                return true;
+            }
+            catch
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+                return false;
             }
         }
     }

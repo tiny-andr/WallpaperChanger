@@ -89,6 +89,17 @@ namespace WallpaperChanger
         }
 
         // Cheap magic-byte check to drop corrupted / fake files without decoding.
+        // Public so a single-file entry point (/apply) can validate its argument
+        // the same way a scan does - otherwise a text file with a .jpg name slips
+        // through and the "applied" report becomes a lie.
+        public static bool LooksLikeImage(string file)
+        {
+            if (string.IsNullOrEmpty(file)) return false;
+            string ext = Path.GetExtension(file);
+            if (!AllowedExts.Contains(ext)) return false;
+            return LooksLikeImage(file, ext);
+        }
+
         private static bool LooksLikeImage(string file, string ext)
         {
             try

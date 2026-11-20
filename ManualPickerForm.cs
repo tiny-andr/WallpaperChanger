@@ -908,9 +908,30 @@ namespace WallpaperChanger
         private void Save()
         {
             List<string> picks = new List<string>();
+            HashSet<string> emitted = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string p in allPaths)
             {
-                if (picked.Contains(Normalize(p))) picks.Add(p);
+                if (picked.Contains(Normalize(p)))
+                {
+                    string norm = Normalize(p);
+                    if (emitted.Add(norm)) picks.Add(p);
+                }
+            }
+            // Keep every stored check that this scan could not see. A disabled
+            // source, an unplugged drive or a folder that is momentarily
+            // unreachable is absent from allPaths, and dropping it here made
+            // "nothing was touched, just press save" erase those checks for
+            // good. The source page promises the opposite: disabling a source
+            // leaves its files and its checked selection alone.
+            HashSet<string> visible = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string p in allPaths) visible.Add(Normalize(p));
+            foreach (string old in Config.ManualPicked)
+            {
+                if (string.IsNullOrEmpty(old)) continue;
+                string norm;
+                try { norm = Normalize(old); } catch { continue; }
+                if (visible.Contains(norm)) continue;   // handled above (may have been unchecked)
+                if (emitted.Add(norm)) picks.Add(old);
             }
             Config.ManualPicked = picks;
             Config.Save();

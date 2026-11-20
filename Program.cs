@@ -29,7 +29,55 @@ namespace WallpaperChanger
             if (a.Equals("/minimized", StringComparison.OrdinalIgnoreCase)) return false;
             if (a.Equals("/apply", StringComparison.OrdinalIgnoreCase)) return false;
             if (a.Equals("/current", StringComparison.OrdinalIgnoreCase)) return false;
-            return a.StartsWith("/", StringComparison.Ordinal);
+            return a.StartsWith("/", StringComparison.Ordinal) || a.StartsWith("-", StringComparison.Ordinal);
+        }
+
+        // A diagnostic run must not touch the live installation: the window-class
+        // switches all build a real MainForm, and its constructor reads the ini,
+        // rewrites it with SaveFromUi(), and - when the source list is non-empty
+        // and the current wallpaper is not in it - switches the user's wallpaper
+        // for real. Each switch used to be trusted to isolate itself; most did
+        // not. This does it once, for every caller, and it is idempotent so the
+        // switches that already set up their own directory keep working.
+        internal static void BeginDiagnosticSandbox()
+        {
+            if (sandboxDir != null) return;
+            try
+            {
+                string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                    "wc-diag-" + System.Diagnostics.Process.GetCurrentProcess().Id);
+                System.IO.Directory.CreateDirectory(dir);
+                AppPaths.DataDirOverride = dir;
+                sandboxDir = dir;
+                // The constructor's "the current wallpaper is not one of mine, so
+                // switch immediately" branch is driven by this list. Emptying it
+                // is what stops a screenshot run from repainting the desktop.
+                Config.Folders = new List<string>();
+                Config.ManualPicked = new List<string>();
+                Config.DisabledFolders = new List<string>();
+                Config.AutoStart = false;
+                Config.CheckUpdates = false;
+                Log.Write("diag: sandbox " + dir);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("diag: sandbox failed: " + ex.Message);
+            }
+        }
+
+        private static string sandboxDir;
+
+        internal static void EndDiagnosticSandbox()
+        {
+            if (sandboxDir == null) return;
+            AppPaths.DataDirOverride = null;
+            string dir = sandboxDir;
+            sandboxDir = null;
+            try
+            {
+                if (System.IO.Directory.Exists(dir)) System.IO.Directory.Delete(dir, true);
+            }
+            catch { }
         }
 
         [STAThread]
@@ -382,6 +430,7 @@ namespace WallpaperChanger
         // product's own controls, not a hand-maintained list that drifts.
         private static int RunLayoutDump(int page)
         {
+            BeginDiagnosticSandbox();
             try
             {
                 MainForm form = new MainForm();
@@ -432,6 +481,7 @@ namespace WallpaperChanger
         private static int RunDropDownTest()
         {
             int failures = 0;
+            BeginDiagnosticSandbox();
             try
             {
                 MainForm form = new MainForm();
@@ -542,6 +592,7 @@ namespace WallpaperChanger
         // the two hero buttons' widths.
         private static int RunStateProbe()
         {
+            BeginDiagnosticSandbox();
             try
             {
                 MainForm form = new MainForm();
@@ -616,6 +667,7 @@ namespace WallpaperChanger
         private static int RunKeyCapTest()
         {
             int bad = 0;
+            BeginDiagnosticSandbox();
             try
             {
                 MainForm form = new MainForm();
@@ -704,6 +756,7 @@ namespace WallpaperChanger
         // that produced the "it takes five or six seconds" report.
         private static int RunPreviewTest(string folder, int count)
         {
+            BeginDiagnosticSandbox();
             try
             {
                 string[] files = System.IO.Directory.GetFiles(folder);
@@ -763,6 +816,7 @@ namespace WallpaperChanger
         // 14 MB PNG is a plausible multi-second cost that nothing else can hide.
         private static int RunFlowTest(string folder, int count)
         {
+            BeginDiagnosticSandbox();
             try
             {
                 string[] files = System.IO.Directory.GetFiles(folder);
@@ -1570,6 +1624,7 @@ namespace WallpaperChanger
         // not describe the 4K window at all.
         private static int RunDpiWindow(int targetDpi, string pngPath, int pageIndex)
         {
+            BeginDiagnosticSandbox();
             try
             {
                 System.Windows.Forms.Screen target = FindMonitorAtDpi(targetDpi);
@@ -1649,6 +1704,7 @@ namespace WallpaperChanger
 
         private static int RunDpiTest(int targetDpi)
         {
+            BeginDiagnosticSandbox();
             try
             {
                 MainForm form = new MainForm();
@@ -1754,6 +1810,11 @@ namespace WallpaperChanger
                     }
                     else if (File.Exists(target))
                     {
+                        // Existing is not the same as being a wallpaper. Without
+                        // this check a text file with a picture name reached the
+                        // engine, the engine reported success, and the caller got
+                        // exit code 0 for a desktop that never changed.
+                        if (!ImageScanner.LooksLikeImage(target)) return 2;
                         path = target;
                     }
                     else
@@ -1769,7 +1830,10 @@ namespace WallpaperChanger
                 }
                 else
                 {
-                    return 2;
+                    // No argument and no configured source is "no picture to
+                    // apply" (3), not "bad argument" (2): the caller passed
+                    // nothing wrong, there is simply nothing to show.
+                    return 3;
                 }
 
                 bool ok = WallpaperEngine.Apply(path, Config.Style);
@@ -1971,10 +2035,15 @@ namespace WallpaperChanger
                 else if (args[i].Equals("--mirror", StringComparison.OrdinalIgnoreCase)) mirrorOnly = true;
                 else if (dir == null) dir = args[i];
             }
+            // True only when this run invented the directory. A caller-supplied
+            // path must never be deleted: "/updatedownload D:\Downloads" used to
+            // wipe that folder and everything in it once the download finished.
+            bool ownedDir = false;
             if (dir == null)
             {
                 dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
                     "wc-update-test-" + System.Guid.NewGuid().ToString("N").Substring(0, 8));
+                ownedDir = true;
             }
             try
             {
@@ -2005,9 +2074,16 @@ namespace WallpaperChanger
                 Console.WriteLine("mirror     : "
                     + (Updater.LastMirror.Length == 0 ? "GitHub" : Updater.LastMirror));
                 Console.WriteLine("sha256     : " + (ok ? "OK " : "MISMATCH ") + hash);
-                if (!keep)
+                // Only the directory this run created is cleaned up. A path the
+                // caller named is theirs: keep the file and say where it went.
+                if (!keep && ownedDir)
                 {
                     try { System.IO.Directory.Delete(dir, true); } catch { }
+                }
+                else
+                {
+                    Console.WriteLine("kept       : " + path);
+                    Log.Write("updatedownload: kept " + path);
                 }
                 return ok ? 0 : 1;
             }

@@ -1583,7 +1583,16 @@ namespace WallpaperChanger
         private void SaveFromFooter()
         {
             bool hadValid = HasValidFolders();
-            SaveFromUi();
+            bool written = SaveFromUi();
+            if (!written)
+            {
+                // Never claim success for a write that did not happen: the data
+                // directory can be read-only or the disk full, and the old
+                // version showed "已保存" anyway.
+                SetStatus(delegate { return Loc.T("status.savefail"); });
+                RefreshDirty();
+                return;
+            }
             dirty = false;
             RefreshDirty();
             SetStatus(delegate { return Loc.T("status.saved"); });
@@ -1882,10 +1891,10 @@ namespace WallpaperChanger
         }
 
         // Apply controls to memory AND persist to disk (save button / exit).
-        private void SaveFromUi()
+        private bool SaveFromUi()
         {
             ApplyFromUi();
-            Config.Save();
+            return Config.Save();
         }
 
         // At least one ENABLED source must exist on disk. Disabled sources
