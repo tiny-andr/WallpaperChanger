@@ -144,6 +144,13 @@ namespace WallpaperChanger
     {
         private static readonly object LockObj = new object();
 
+        // Rotate at 4 MB. The log had no ceiling at all: on a tray app that runs
+        // for weeks, one line per hotkey press and per switch adds up to
+        // hundreds of megabytes eventually, and nothing ever removed it. One
+        // rename per 4 MB is negligible next to the append itself.
+        private const long MaxBytes = 4L * 1024 * 1024;
+        private static int writesSinceCheck;
+
         public static void Write(string msg)
         {
             try
@@ -151,10 +158,31 @@ namespace WallpaperChanger
                 lock (LockObj)
                 {
                     string path = Path.Combine(AppPaths.DataDir, "WallpaperChanger.log");
+                    // Stat once every 256 lines instead of on every append: the
+                    // common case is a handful of writes a minute, and this keeps
+                    // the hot path to a single append.
+                    if ((++writesSinceCheck & 0xFF) == 0) RotateIfNeeded(path);
                     File.AppendAllText(path,
                         DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + msg + Environment.NewLine,
                         new UTF8Encoding(false));
                 }
+            }
+            catch
+            {
+            }
+        }
+
+        // Keeps the file under MaxBytes by moving it aside once. Only one previous
+        // log is kept: this is a diagnostic trace, not an audit trail.
+        private static void RotateIfNeeded(string path)
+        {
+            try
+            {
+                FileInfo cur = new FileInfo(path);
+                if (!cur.Exists || cur.Length < MaxBytes) return;
+                string old = path + ".old";
+                try { if (File.Exists(old)) File.Delete(old); } catch { }
+                try { File.Move(path, old); } catch { }
             }
             catch
             {

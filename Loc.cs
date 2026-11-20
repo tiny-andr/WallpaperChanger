@@ -159,7 +159,6 @@ namespace WallpaperChanger
             m["status.paused"] = "轮换已暂停";
             m["status.rotate.paused"] = "已暂停轮换";
             m["status.rotate.resumed"] = "轮换已恢复";
-            m["mode.tag"] = "　[手动模式 · {0} 张]";
 
             m["tray.next"] = "下一张壁纸";
             m["tray.prev"] = "上一张壁纸";
@@ -218,7 +217,6 @@ namespace WallpaperChanger
             m["src.alloff"] = "禁用全部";
             m["src.refresh"] = "刷新数量";
             m["src.noSource"] = "尚未添加任何壁纸源，点击「添加...」选择一个图片文件夹";
-            m["src.summary"] = "共 {0} 个源 · 启用 {1} · 禁用 {2} · 启用源图片合计 {3} 张";
             m["src.hint"] = "勾选「状态」＝ 启用该源，取消勾选 ＝ 禁用（暂时移出轮换）。\r\n禁用只影响轮换，图片与已勾选记录都会保留，重新勾选即恢复；数量递归统计子文件夹，只计支持的壁纸格式。";
             m["src.count.pending"] = "…";
             m["src.count.unavailable"] = "不可用";
@@ -398,7 +396,6 @@ namespace WallpaperChanger
             m["status.paused"] = "Rotation paused";
             m["status.rotate.paused"] = "Rotation paused";
             m["status.rotate.resumed"] = "Rotation resumed";
-            m["mode.tag"] = "  [manual · {0}]";
 
             m["tray.next"] = "Next wallpaper";
             m["tray.prev"] = "Previous wallpaper";
@@ -457,7 +454,6 @@ namespace WallpaperChanger
             m["src.alloff"] = "Disable all";
             m["src.refresh"] = "Recount";
             m["src.noSource"] = "No wallpaper source yet - click \"Add...\" to pick a picture folder";
-            m["src.summary"] = "{0} sources · {1} enabled · {2} disabled · {3} wallpapers in enabled sources";
             m["src.hint"] = "Tick \"State\" to enable a source, untick to disable it (temporarily removed from rotation).\r\nDisabling only pauses its contribution: the files and their checked wallpapers are kept, and re-ticking restores everything. Counts are recursive and cover supported wallpaper formats only.";
             m["src.count.pending"] = "...";
             m["src.count.unavailable"] = "Unavailable";
@@ -637,7 +633,6 @@ namespace WallpaperChanger
             m["status.paused"] = "ローテーション停止中";
             m["status.rotate.paused"] = "ローテーションを停止しました";
             m["status.rotate.resumed"] = "ローテーションを再開しました";
-            m["mode.tag"] = "　[手動モード · {0} 枚]";
 
             m["tray.next"] = "次の壁紙";
             m["tray.prev"] = "前の壁紙";
@@ -696,7 +691,6 @@ namespace WallpaperChanger
             m["src.alloff"] = "すべて無効";
             m["src.refresh"] = "数を再取得";
             m["src.noSource"] = "壁紙ソースがありません。「追加...」で画像フォルダーを選択してください";
-            m["src.summary"] = "ソース {0} 件 · 有効 {1} · 無効 {2} · 有効ソースの壁紙合計 {3} 枚";
             m["src.hint"] = "「状態」をチェック＝そのソースを有効、外す＝無効（一時的にローテーションから除外）。\r\n無効にしても画像とチェック済みの記録は保持され、再チェックで復元されます。枚数は再帰的に集計し、対応形式のみを数えます。";
             m["src.count.pending"] = "…";
             m["src.count.unavailable"] = "利用不可";

@@ -559,10 +559,19 @@ namespace WallpaperChanger
             if (paths.Count == 0 || cols <= 0) return -1;
             int x = pt.X - AutoScrollPosition.X - spacing;
             int y = pt.Y - AutoScrollPosition.Y - spacing;
+            // C# integer division truncates towards zero, so -5 / 266 is 0, not
+            // -1: a click in the 8px margin above or left of the first tile came
+            // out as column 0 / row 0 and silently toggled the first wallpaper.
+            // The bounds check below could never catch it because the value was
+            // already a legitimate index.
+            if (x < 0 || y < 0) return -1;
             int rowH = cellImgH + cellLabelH;
             int col = x / Math.Max(1, cellW + spacing);
             int row = y / Math.Max(1, rowH + spacing);
             if (col < 0 || col >= cols || row < 0) return -1;
+            // Rows are laid out as tile + gap; a click in the gap between rows is
+            // not on a tile either.
+            if (y % Math.Max(1, rowH + spacing) >= rowH) return -1;
             int idx = row * cols + col;
             if (idx >= paths.Count) return -1;
             return idx;

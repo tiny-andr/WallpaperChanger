@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -20,6 +21,36 @@ namespace WallpaperChanger
         // user's autostart shortcut at the test build, because that ini said
         // auto_start=1 (see MainForm's SetAutoStart call).
         internal static bool DiagnosticRun;
+
+        // This is a WinExe, which does not own a console: Console.WriteLine goes
+        // to an invalid handle and every assert the diagnostic switches print is
+        // silently discarded, leaving only an exit code. Attaching to the parent
+        // console (when one exists - it does exactly when someone ran the switch
+        // from a shell) makes those messages visible where they were written to
+        // be seen.
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AttachConsole(int processId);
+
+        private const int ATTACH_PARENT_PROCESS = -1;
+
+        private static void AttachParentConsoleIfAny()
+        {
+            try
+            {
+                if (!AttachConsole(ATTACH_PARENT_PROCESS)) return;
+                // Re-open the standard streams against the console we just joined;
+                // the ones set up by the WinExe subsystem point at nothing.
+                StreamWriter w = new StreamWriter(Console.OpenStandardOutput());
+                w.AutoFlush = true;
+                Console.SetOut(w);
+                StreamWriter e = new StreamWriter(Console.OpenStandardError());
+                e.AutoFlush = true;
+                Console.SetError(e);
+            }
+            catch
+            {
+            }
+        }
 
         private static bool IsDiagnosticRun(string[] args)
         {
@@ -105,6 +136,7 @@ namespace WallpaperChanger
             Config.Load();
             Loc.Init();
             DiagnosticRun = IsDiagnosticRun(args);
+            if (DiagnosticRun) AttachParentConsoleIfAny();
 
             // Silent apply mode:  WallpaperChanger.exe /apply [file-or-folder]
             // exit codes: 0 ok, 1 apply failed, 2 bad argument, 3 no images
@@ -408,11 +440,41 @@ namespace WallpaperChanger
                         try
                         {
                             ev.WaitOne();
-                            form.BeginInvoke(new Action(delegate { form.ShowFromTray(); }));
+                            // The window can be gone for good; then the listener
+                            // has nothing left to do.
+                            if (form.IsDisposed || form.Disposing) return;
+                            try
+                            {
+                                form.BeginInvoke(new Action(delegate { form.ShowFromTray(); }));
+                            }
+                            catch (InvalidOperationException)
+                            {
+                                // Handle not created yet, or it was recreated
+                                // while this was in flight. One missed wake-up is
+                                // not a reason to kill the listener forever: the
+                                // old code returned from the loop here, and since
+                                // the second instance's ev.Set() still succeeds
+                                // (the kernel event outlives the dead thread), the
+                                // Process/ShowWindow fallback never ran either -
+                                // double-clicking the icon then did nothing at all
+                                // until the app was restarted.
+                                Log.Write("show: BeginInvoke failed, keeping listener alive");
+                            }
                         }
-                        catch
+                        catch (ObjectDisposedException)
                         {
-                            return;
+                            return;   // the form was disposed mid-wait
+                        }
+                        catch (ThreadAbortException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            // Anything else is transient. Log it and keep waiting;
+                            // a permanently silent listener is worse than a noisy
+                            // log.
+                            Log.Write("show: listener error: " + ex.GetType().Name + ": " + ex.Message);
                         }
                     }
                 });

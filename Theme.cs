@@ -743,6 +743,11 @@ namespace WallpaperChanger
         public static void ApplyMenuStrip(ToolStrip menu)
         {
             if (menu == null) return;
+            // ToolStripRenderer implements IDisposable and caches pens/brushes, so
+            // replacing it without disposing leaked a renderer per theme switch.
+            // Small, but it is a fixed cost paid every time the user flips the
+            // theme, and this is the only place that allocates one.
+            IDisposable old = menu.Renderer as IDisposable;
             if (IsDark)
             {
                 menu.Renderer = new DarkMenuRenderer();
@@ -755,6 +760,7 @@ namespace WallpaperChanger
                 menu.BackColor = SystemColors.Menu;
                 menu.ForeColor = SystemColors.MenuText;
             }
+            if (old != null) { try { old.Dispose(); } catch { } }
             foreach (ToolStripItem it in menu.Items)
             {
                 it.ForeColor = MenuFore;

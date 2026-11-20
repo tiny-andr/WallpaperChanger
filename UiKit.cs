@@ -87,6 +87,25 @@ namespace WallpaperChanger
             TextFormatFlags flags)
         {
             if (string.IsNullOrEmpty(s)) return;
+            // EndEllipsis alone does not put a "…" on a run with no break
+            // opportunity (long file names, paths): GDI's glyph run comes back
+            // sliced mid-character instead, which reads as a rendering bug. Fit
+            // measures and cuts with a real ellipsis, so every caller that asks
+            // for ellipsis gets the behaviour it asked for.
+            if ((flags & TextFormatFlags.EndEllipsis) != 0 &&
+                (flags & TextFormatFlags.WordBreak) == 0)
+            {
+                bool truncated;
+                string fitted = Fit(s, f, r.Width, out truncated);
+                if (truncated)
+                {
+                    // Already cut to size: draw it plainly so the following clip
+                    // never has anything to slice, and turn ellipsis off so GDI
+                    // does not add a second "…" on top of the measured one.
+                    flags &= ~TextFormatFlags.EndEllipsis;
+                    s = fitted;
+                }
+            }
             TextRenderer.DrawText(g, s, f, r, c, flags);
         }
 
@@ -636,7 +655,17 @@ namespace WallpaperChanger
                 }
                 else
                 {
-                    if (designW > 0 && p.X + p.W >= designW)
+                    // A placement fills the row when it was DESIGNED full width,
+                    // i.e. its own width already spans the body (X=0, W=684 for a
+                    // rule/list/status line). The test used to be
+                    // "p.X + p.W >= designW", which is also true for a control
+                    // that merely ENDS at the right edge: the overview's
+                    // 「下一张壁纸」 is X=507 W=141, so X+W == 648 == the widest
+                    // placement, and it was stretched across the whole card while
+                    // its 「上一张」 partner kept 141. At the 980 design width the
+                    // card body is exactly 648 too, so the stretch was invisible;
+                    // any wider window (or any DPI where the body grows) showed it.
+                    if (designW > 0 && p.W >= designW)
                         w = Math.Max(0, b.Width - Gfx.S(this, p.X));
 
                     // Only the row the pinned control sits on is clipped: a
@@ -1456,7 +1485,13 @@ namespace WallpaperChanger
             }
             else if (e.KeyCode == Keys.Enter && open != null)
             {
-                open.Close();
+                // CloseList(), not Close(): it is the only path that also calls
+                // ForgetList, and the field pointing at a destroyed form is what
+                // makes the next click see "already open" and merely toggle the
+                // dead reference - the list then never opens again until the
+                // window is recreated. Every other exit (Esc, mouse, deactivate,
+                // handle destroyed) already goes through CloseList.
+                open.CloseList();
                 e.Handled = true;
             }
         }
@@ -1675,7 +1710,17 @@ namespace WallpaperChanger
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
                      ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+            // 6 design pixels. Set on handle creation rather than here: DeviceDpi
+            // is not reliable before the control has a handle, and using the raw
+            // 6 left the bar visibly thinner than everything around it at 150%.
             Height = 6;
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            int want = Gfx.S(this, 6);
+            if (Height != want) Height = want;
         }
 
         public void ApplyTheme()
@@ -2912,8 +2957,15 @@ namespace WallpaperChanger
     internal class HistoryList : Control, IThemed
     {
         private const int MaxTiles = 5;
-        private const int GapPx = 8;
-        private const int PadPx = 6;
+        // Design pixels, scaled at use: they used to be applied raw, so the
+        // strip kept 8px gaps and 6px padding at 150% while everything around it
+        // grew, which left the tiles crowded together and the row hugging the
+        // card's left edge.
+        private const int GapPxDesign = 8;
+        private const int PadPxDesign = 6;
+
+        private int GapPx { get { return Gfx.S(this, GapPxDesign); } }
+        private int PadPx { get { return Gfx.S(this, PadPxDesign); } }
 
         private Image[] thumbs = new Image[0];
         private int currentIndex = -1;

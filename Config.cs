@@ -207,12 +207,28 @@ namespace WallpaperChanger
                 List<string> disabledList = new List<string>();
                 foreach (string rawLine in File.ReadAllLines(ConfigPath, Encoding.UTF8))
                 {
-                    string line = rawLine.Trim();
-                    if (line.Length == 0 || line.StartsWith(";") || line.StartsWith("#")) continue;
+                    // TrimEnd('\r') only: the whole-line Trim() below used to eat
+                    // a trailing space that is part of a path value. Blank and
+                    // comment detection is done on the trimmed form.
+                    string line = rawLine.TrimEnd('\r');
+                    string probe = line.Trim();
+                    if (probe.Length == 0 || probe.StartsWith(";") || probe.StartsWith("#")) continue;
                     int eq = line.IndexOf('=');
                     if (eq <= 0) continue;
                     string key = line.Substring(0, eq).Trim();
-                    string val = line.Substring(eq + 1).Trim();
+                    // Path values keep their trailing spaces. Windows allows a
+                    // directory name to end in one ("mkdir 'a '" is legal), and
+                    // trimming it on load turned a valid source into a path that
+                    // does not exist, so the source silently disappeared from the
+                    // list. Only the right-hand whitespace is at risk; the leading
+                    // one cannot be part of a path written after "key=".
+                    bool isPathKey = string.Equals(key, "folder", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(key, "picked", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(key, "disabled", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(key, "last_applied", StringComparison.OrdinalIgnoreCase);
+                    string val = isPathKey
+                        ? line.Substring(eq + 1)
+                        : line.Substring(eq + 1).Trim();
                     if (string.Equals(key, "folder", StringComparison.OrdinalIgnoreCase))
                     {
                         if (val.Length > 0) folderList.Add(val);
@@ -268,7 +284,10 @@ namespace WallpaperChanger
 
                 // Where the last session stopped switching. A missing or blank
                 // value means "no record", and the walk starts at the front.
-                if (single.TryGetValue("last_applied", out v)) LastApplied = v.Trim();
+                // Trailing spaces are part of the path, so no Trim() here - only a
+                // blank value means "no record".
+                if (single.TryGetValue("last_applied", out v))
+                    LastApplied = v.Length > 0 ? v.TrimEnd('\r') : "";
                 if (single.TryGetValue("auto_start", out v)) AutoStart = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("check_updates", out v)) CheckUpdates = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
                 if (single.TryGetValue("recursive", out v)) Recursive = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));

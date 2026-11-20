@@ -485,20 +485,22 @@ namespace WallpaperChanger
             PageStack page = NewPage(null, null);
 
             // "正在显示": preview on the left, facts and actions on the right.
-            // The card body is 648px wide (684 minus the 18px padding on both
-            // sides), so the right column has to END at 648: the old rx=396 +
-            // rw=288 ran 36px past the card and the third fact label was
-            // ellipsised in every language ("Manual..." at 109px in a 92px
-            // slot). The preview gives up 34px of width here - it stays 16:9 at
-            // 340x191 and is vertically centred in the 210px body - and the
-            // three fact columns are sized to their own labels rather than
-            // split evenly: 74 (In rotation, 62px), 94 (Images scanned, 91px)
-            // and 124, because the mode value is prose, not a count.
+            // The card body is 684px wide (a 720px card minus 18px padding on
+            // each side), so this right column starts at 356 and has 328 of room
+            // left: 356 + 328 = 684, the body's right edge. It used to say 292,
+            // which stops at 648 - a value from back when the body was measured
+            // as 648 - and left the column 36px short of the card's edge. The
+            // 「下一张壁纸」 button then happened to end exactly on the body edge,
+            // so the generic "this placement reaches the right edge, stretch it"
+            // rule in CardPanel.ApplyPlacements blew that one button up to the
+            // full body width while 「上一张」 stayed 141: the two-button pair was
+            // visibly uneven. Sizing the column correctly and splitting it into
+            // two equal halves fixes the pair at the source instead.
             CardPanel hero = page.AddCard(Theme.CardPad * 2 + 210);
             nowPreview = hero.AddChild(new PreviewBox(), 0, 9, 340, 191);
             nowPreview.EmptyText = Loc.T("ov.preview.none");
 
-            const int rx = 356, rw = 292;
+            const int rx = 356, rw = 684 - 356;
             // The wallpaper's own name and path are deliberately NOT shown:
             // the preview beside them answers "what is showing", and a file
             // name and its full path belong in Explorer, not on this card. The
@@ -886,9 +888,13 @@ namespace WallpaperChanger
             btnUpdateCheck.Text = Loc.T("update.check");
             lblUpdateCurrent.Text = Loc.F("update.current", current);
             lblUpdateAuto.Text = Loc.T("update.auto");
-            btnUpdatePrimary.Visible = false;
-            btnUpdateLink.Visible = false;
-            barUpdate.Visible = false;
+            // Not "hide everything, then let the switch re-show what it needs":
+            // the download path calls this every 150 ms to move the percentage,
+            // and toggling Visible that often made the bar and the button blink
+            // about six times a second. The switch below now only assigns what
+            // each state actually wants, and SetShown() skips the assignment
+            // (and the WM_SHOWWINDOW round trip) when nothing changed.
+            bool wantPrimary = false, wantLink = false, wantBar = false;
 
             switch (updateState)
             {
@@ -916,15 +922,15 @@ namespace WallpaperChanger
                     {
                         btnUpdatePrimary.Text = Loc.T("update.install");
                         btnUpdatePrimary.Kind = BtnKind.Primary;
-                        btnUpdatePrimary.Visible = true;
+                        wantPrimary = true;
                         btnUpdateLink.Text = Loc.T("update.openpage");
-                        btnUpdateLink.Visible = true;
+                        wantLink = true;
                     }
                     else
                     {
                         btnUpdatePrimary.Text = Loc.T("update.openpage");
                         btnUpdatePrimary.Kind = BtnKind.Primary;
-                        btnUpdatePrimary.Visible = true;
+                        wantPrimary = true;
                     }
                     break;
                 case UpdateState.Downloading:
@@ -933,11 +939,11 @@ namespace WallpaperChanger
                             MbText(updateDone), MbText(updateTotal))
                         : Loc.F("update.status.downloading.nolen", updatePercent,
                             MbText(updateDone));
-                    barUpdate.Visible = true;
+                    wantBar = true;
                     barUpdate.Value = updatePercent * 10;
                     btnUpdatePrimary.Text = Loc.T("update.cancel");
                     btnUpdatePrimary.Kind = BtnKind.Secondary;
-                    btnUpdatePrimary.Visible = true;
+                    wantPrimary = true;
                     break;
                 case UpdateState.Launching:
                     lblUpdateStatus.Text = Loc.T("update.status.launching");
@@ -946,11 +952,26 @@ namespace WallpaperChanger
                     lblUpdateStatus.Text = Loc.F("update.status.failed", updateError);
                     btnUpdatePrimary.Text = Loc.T("update.retry");
                     btnUpdatePrimary.Kind = BtnKind.Secondary;
-                    btnUpdatePrimary.Visible = true;
+                    wantPrimary = true;
                     btnUpdateLink.Text = Loc.T("update.openpage");
-                    btnUpdateLink.Visible = true;
+                    wantLink = true;
                     break;
             }
+            SetShown(btnUpdatePrimary, wantPrimary);
+            SetShown(btnUpdateLink, wantLink);
+            SetShown(barUpdate, wantBar);
+        }
+
+        // Assigns Visible only when it actually changes. Setting it to the value
+        // it already has still runs through SetVisibleCore and sends
+        // WM_SHOWWINDOW, and the download path re-renders this card every 150 ms
+        // to move the percentage - which used to make the bar and the button
+        // visibly blink for the whole download.
+        private static void SetShown(Control c, bool show)
+        {
+            if (c == null) return;
+            if (c.Visible == show) return;
+            c.Visible = show;
         }
 
         private static string MbText(long bytes)
@@ -992,7 +1013,7 @@ namespace WallpaperChanger
                         updateState = UpdateState.Failed;
                         updateError = err;
                         RenderUpdateCard();
-                        if (manual) SetStatus(delegate { return Loc.F("update.status.failed", err); });
+                        if (manual) SetStatus(delegate { return Loc.F("update.status.failed", err); }, true);
                         return;
                     }
                     string current = Application.ProductVersion;
@@ -1088,7 +1109,7 @@ namespace WallpaperChanger
                         updateError = e;
                         updatePercent = 0;
                         RenderUpdateCard();
-                        SetStatus(delegate { return Loc.F("update.status.failed", e); });
+                        SetStatus(delegate { return Loc.F("update.status.failed", e); }, true);
                     });
                     return;
                 }
@@ -1131,7 +1152,7 @@ namespace WallpaperChanger
                 updateState = UpdateState.Failed;
                 updateError = ex.Message;
                 RenderUpdateCard();
-                SetStatus(delegate { return Loc.F("update.status.failed", ex.Message); });
+                SetStatus(delegate { return Loc.F("update.status.failed", ex.Message); }, true);
                 return;
             }
             // Setup needs the exe to be gone. Its [Run] entry starts the new
@@ -1175,7 +1196,7 @@ namespace WallpaperChanger
             }
             catch (Exception ex)
             {
-                SetStatus(delegate { return Loc.F("update.status.failed", ex.Message); });
+                SetStatus(delegate { return Loc.F("update.status.failed", ex.Message); }, true);
             }
         }
 
@@ -1497,7 +1518,7 @@ namespace WallpaperChanger
                 string folder = dlg.SelectedPath;
                 if (!srcList.AddSource(folder))
                 {
-                    SetStatus(delegate { return Loc.T("status.folder.dup"); });
+                    SetStatus(delegate { return Loc.T("status.folder.dup"); }, true);
                     return;
                 }
                 OnSourcesEdited();
@@ -1616,7 +1637,7 @@ namespace WallpaperChanger
             }
             catch (Exception ex)
             {
-                SetStatus(delegate { return Loc.F("status.error", ex.Message); });
+                SetStatus(delegate { return Loc.F("status.error", ex.Message); }, true);
             }
         }
 
@@ -1631,7 +1652,7 @@ namespace WallpaperChanger
                 // Never claim success for a write that did not happen: the data
                 // directory can be read-only or the disk full, and the old
                 // version showed "已保存" anyway.
-                SetStatus(delegate { return Loc.T("status.savefail"); });
+                SetStatus(delegate { return Loc.T("status.savefail"); }, true);
                 RefreshDirty();
                 return;
             }
@@ -1980,7 +2001,7 @@ namespace WallpaperChanger
                 + " (manager=" + (hotkeyManager != null) + ", handle=" + IsHandleCreated + ")");
             if (hotkeyManager == null || !IsHandleCreated) return;
             string problem = hotkeyManager.Set(Config.Hotkey, Config.HotkeyPrev);
-            if (problem != null) SetStatus(problem);
+            if (problem != null) SetStatus(problem, true);
         }
 
         // Register the pair the user just picked, and only then remember it.
@@ -2010,7 +2031,7 @@ namespace WallpaperChanger
             hotkeyManager.Set(oldNext, oldPrev);
             Config.Save();
             RefreshHotkeyButtons();
-            SetStatus(problem);
+            SetStatus(problem, true);
         }
 
         // The key buttons read their label from Config, so a rejected change has
@@ -2150,7 +2171,7 @@ namespace WallpaperChanger
             if (busy) { ReportBusy(); return; }
             if (!HasValidFolders())
             {
-                SetStatus(delegate { return Loc.T("status.novalidfolder"); });
+                SetStatus(delegate { return Loc.T("status.novalidfolder"); }, true);
                 return;
             }
 
@@ -2209,7 +2230,7 @@ namespace WallpaperChanger
                         {
                             Log.Write("redo apply failed: " + path);
                             string n2 = name;
-                            SetStatus(delegate { return Loc.F("status.applyfail", n2); });
+                            SetStatus(delegate { return Loc.F("status.applyfail", n2); }, true);
                         }
                     }
                     finally
@@ -2271,7 +2292,7 @@ namespace WallpaperChanger
                     // did nothing visible and "下一张" looked broken.
                     SafeUi(delegate
                     {
-                        try { SetStatus(delegate { return Loc.T("status.nothingnext"); }); }
+                        try { SetStatus(delegate { return Loc.T("status.nothingnext"); }, true); }
                         finally { busy = false; }
                     });
                 }
@@ -2355,14 +2376,14 @@ namespace WallpaperChanger
                     // on screen.
                     Log.Write("apply failed: " + path);
                     string n4 = Path.GetFileName(path);
-                    SetStatus(delegate { return Loc.F("status.applyfail", n4); });
+                    SetStatus(delegate { return Loc.F("status.applyfail", n4); }, true);
                 }
             }
             catch (Exception ex)
             {
                 Log.Write("apply error: " + ex.Message);
                 string em = ex.Message;
-                SetStatus(delegate { return Loc.F("status.error", em); });
+                SetStatus(delegate { return Loc.F("status.error", em); }, true);
             }
             finally
             {
@@ -2567,6 +2588,11 @@ namespace WallpaperChanger
             int n = forward.Count;
             if (n > 0 && string.Equals(forward[n - 1], path, StringComparison.OrdinalIgnoreCase)) return;
             forward.Add(path);
+            // Bounded like history: without a cap, stepping back through a long
+            // session kept growing this stack, and every entry cost a 264x148
+            // thumbnail written to disk for a tile the five-wide strip can never
+            // show.
+            if (forward.Count > HistoryLimit) forward.RemoveRange(0, forward.Count - HistoryLimit);
             RebuildHistory();
         }
 
@@ -2649,13 +2675,22 @@ namespace WallpaperChanger
 
         private void RequestMissingThumbs(List<string> timeline)
         {
+            // Only what the strip actually draws. The timeline also contains the
+            // whole forward stack, whose entries are never rendered (the strip is
+            // five tiles, newest first), so generating thumbnails for all of them
+            // wrote 264x148 PNGs to disk that no one would ever see.
             List<string> missing = new List<string>();
-            foreach (string p in timeline)
+            if (timeline != null)
             {
-                if (thumbRequested.Contains(p)) continue;
-                if (ThumbCache.Get(p, HistThumbW, HistThumbH) != null) continue;
-                thumbRequested.Add(p);
-                missing.Add(p);
+                int n = Math.Min(5, timeline.Count);
+                for (int r = 0; r < n; r++)
+                {
+                    string p = timeline[timeline.Count - 1 - r];
+                    if (thumbRequested.Contains(p)) continue;
+                    if (ThumbCache.Get(p, HistThumbW, HistThumbH) != null) continue;
+                    thumbRequested.Add(p);
+                    missing.Add(p);
+                }
             }
             if (missing.Count == 0) return;
 
@@ -2724,7 +2759,7 @@ namespace WallpaperChanger
                         }
                         else
                         {
-                            SetStatus(delegate { return Loc.F("status.applyfail", name); });
+                            SetStatus(delegate { return Loc.F("status.applyfail", name); }, true);
                         }
                     }
                     finally
@@ -2745,7 +2780,7 @@ namespace WallpaperChanger
             if (busy) { ReportBusy(); return; }
             if (history.Count < 2)
             {
-                SetStatus(delegate { return Loc.T("status.noprev"); });
+                SetStatus(delegate { return Loc.T("status.noprev"); }, true);
                 return;
             }
 
@@ -2793,7 +2828,7 @@ namespace WallpaperChanger
                         else
                         {
                             string n6 = name;
-                            SetStatus(delegate { return Loc.F("status.prevfail", n6); });
+                            SetStatus(delegate { return Loc.F("status.prevfail", n6); }, true);
                         }
                     }
                     finally
@@ -2809,33 +2844,33 @@ namespace WallpaperChanger
         // describing the app ("next switch: 22:40") and does not get replaced
         // for the rest of the session by whatever happened once.
         //
-        // Severity is inferred from the text rather than passed in: the call
-        // sites are spread over two dozen places and every one of them already
-        // carries a localised message that says which it is.
+        // The caller knows whether this is a failure, so it says so. Severity
+        // used to be inferred by substring-matching the finished text against a
+        // list of words like "失败" / "failed" / "无法", which was wrong in both
+        // directions: status.novalidfolder ("请先添加至少一个有效的图片文件夹")
+        // matches none of them and was painted in the OK green, reading like a
+        // success, while any localised message that happened to contain one of
+        // the words was flagged as an error.
         private void SetStatus(string line)
         {
+            SetStatus(line, false);
+        }
+
+        private void SetStatus(string line, bool isError)
+        {
             if (string.IsNullOrEmpty(line)) return;
-            ShowNotice(line, LooksLikeError(line));
+            ShowNotice(line, isError);
         }
 
         private void SetStatus(Func<string> render)
         {
-            if (render == null) return;
-            SetStatus(render() ?? "");
+            SetStatus(render, false);
         }
 
-        private static bool LooksLikeError(string s)
+        private void SetStatus(Func<string> render, bool isError)
         {
-            string[] marks = {
-                "！", "!", "失败", "错误", "无法", "没有可用", "重复",
-                "failed", "error", "cannot", "no pictures", "already",
-                "エラー", "できません", "失敗"
-            };
-            foreach (string mk in marks)
-            {
-                if (s.IndexOf(mk, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            }
-            return false;
+            if (render == null) return;
+            SetStatus(render() ?? "", isError);
         }
 
         // A message that is not the status: "no pictures in any folder",
@@ -3028,6 +3063,17 @@ namespace WallpaperChanger
             int designH = (int)Math.Round(Theme.WindowH * dpi / 96.0);
             int designW = (int)Math.Round(Theme.WindowW * dpi / 96.0);
             if (designH > wa.Height || designW > wa.Width) return;
+            // The window cannot be resized (CreateParams strips WS_THICKFRAME),
+            // so the only size it can legitimately have is the design size scaled
+            // by the current DPI. A value well away from that is a transient
+            // reading - DeviceDpi and the window's real pixels were sampled at
+            // different moments during a DPI migration - and storing it poisoned
+            // the config: one such run wrote window_size=1470x930 into an ini
+            // whose design size is 980x668, and from then on every launch opened
+            // a window 1.5x as wide as the design, on every monitor. Keep the
+            // previous value instead of a reading that cannot be real.
+            if (Math.Abs(w - Theme.WindowW) > Theme.WindowW / 20) return;
+            if (Math.Abs(h - Theme.WindowH) > Theme.WindowH / 20) return;
             Config.WindowWidth = w;
             Config.WindowHeight = h;
         }

@@ -27,9 +27,62 @@ namespace WallpaperChanger
         private static readonly HashSet<string> Generating =
             new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // The cache had no ceiling: every distinct (path, size, mtime) pair adds
+        // a PNG and nothing ever removed one, so it grows for as long as the app
+        // is used. Measured 5,509 files / 242 MB after 2.5 months, about 95 MB a
+        // month - a few GB over a couple of years, for thumbnails of pictures the
+        // user may no longer even have.
+        private const long MaxCacheBytes = 400L * 1024 * 1024;
+        private const string StampName = ".prune";
+
         static ThumbCache()
         {
             try { Directory.CreateDirectory(CacheDir); } catch { }
+            try { PruneIfDue(); } catch { }
+        }
+
+        // Oldest-first eviction down to three quarters of the cap, so this does
+        // not run again on the very next launch. Once a week is enough to keep
+        // the directory bounded; the stamp file records the last run.
+        private static void PruneIfDue()
+        {
+            string stamp = Path.Combine(CacheDir, StampName);
+            try
+            {
+                if (File.Exists(stamp) &&
+                    (DateTime.UtcNow - File.GetLastWriteTimeUtc(stamp)).TotalDays < 7) return;
+            }
+            catch { }
+
+            try
+            {
+                DirectoryInfo di = new DirectoryInfo(CacheDir);
+                FileInfo[] files = di.GetFiles("*.png");
+                long total = 0;
+                foreach (FileInfo f in files) total += f.Length;
+                if (total > MaxCacheBytes)
+                {
+                    Array.Sort(files, delegate (FileInfo a, FileInfo b)
+                    {
+                        return a.LastWriteTimeUtc.CompareTo(b.LastWriteTimeUtc);
+                    });
+                    long target = (long)(MaxCacheBytes * 0.75);
+                    foreach (FileInfo f in files)
+                    {
+                        if (total <= target) break;
+                        try
+                        {
+                            long len = f.Length;
+                            f.Delete();
+                            total -= len;
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
+
+            try { File.WriteAllText(stamp, DateTime.UtcNow.ToString("o")); } catch { }
         }
 
         // Returns the cached thumbnail if it exists and has the expected size.
