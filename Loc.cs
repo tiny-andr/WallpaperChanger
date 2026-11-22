@@ -142,7 +142,7 @@ namespace WallpaperChanger
             m["status.novalidfolder"] = "请先添加至少一个有效的图片文件夹";
             m["status.current"] = "当前壁纸: {0}（共 {1} 张）";
             m["status.current.prev"] = "当前壁纸: {0}（上一张）";
-            m["status.manual.emptypool"] = "手动模式已开启，但勾选集合里没有可用图片（请打开手动壁纸选择勾选）";
+            m["status.manual.emptypool"] = "手动模式已开启，但勾选集合里没有可用图片（选择器 → 彻底关闭手动选择壁纸）";
             m["status.nopictures"] = "所有文件夹里都没有可用图片";
             m["status.applyfail"] = "壁纸设置失败: {0}";
             m["status.error"] = "出错: {0}";
@@ -322,6 +322,8 @@ namespace WallpaperChanger
             m["src.empty"] = "还没有壁纸源，点右上角「添加文件夹」开始。";
             m["src.manage"] = "管理壁纸源";
             m["src.manual"] = "手动挑选壁纸";
+            m["src.manual.badge.on"] = "已启用 · {0} 张";
+            m["src.manual.badge.off"] = "已关闭";
             m["rot.page.note"] = "决定壁纸怎么铺、多久换一次、按什么顺序挑。";
             m["rot.keycap.capture"] = "按下组合键…";
             m["ov.kbd.hint"] = "随时随地按 {0} 下一张 · {1} 上一张";
@@ -382,7 +384,7 @@ namespace WallpaperChanger
             m["status.novalidfolder"] = "Add at least one valid picture folder first";
             m["status.current"] = "Current: {0} ({1} total)";
             m["status.current.prev"] = "Current: {0} (previous)";
-            m["status.manual.emptypool"] = "Manual mode is on but no checked image is available (open manual selection and check some)";
+            m["status.manual.emptypool"] = "Manual mode is on but no checked image is available (picker -> \"Turn off manual selection\")";
             m["status.nopictures"] = "No usable images found in any folder";
             m["status.applyfail"] = "Failed to set wallpaper: {0}";
             m["status.error"] = "Error: {0}";
@@ -559,6 +561,8 @@ namespace WallpaperChanger
             m["src.empty"] = "No wallpaper source yet - start with \"Add folder\" in the top right.";
             m["src.manage"] = "Manage sources";
             m["src.manual"] = "Pick wallpapers";
+            m["src.manual.badge.on"] = "On · {0} wallpapers";
+            m["src.manual.badge.off"] = "Off";
             m["rot.page.note"] = "How wallpapers are laid out, how often they change, and in what order they are picked.";
             m["rot.keycap.capture"] = "Press a combination...";
             m["ov.kbd.hint"] = "Press {0} anywhere for next · {1} for previous";
@@ -619,7 +623,7 @@ namespace WallpaperChanger
             m["status.novalidfolder"] = "有効な画像フォルダーを先に追加してください";
             m["status.current"] = "現在の壁紙: {0}（全 {1} 枚）";
             m["status.current.prev"] = "現在の壁紙: {0}（前の壁紙）";
-            m["status.manual.emptypool"] = "手動モードが有効ですが、チェック済みの画像がありません（手動壁紙選択でチェックしてください）";
+            m["status.manual.emptypool"] = "手動モードが有効ですが、チェック済みの画像がありません（選択画面 → 「手動選択を完全にオフにする」）";
             m["status.nopictures"] = "どのフォルダーにも利用できる画像がありません";
             m["status.applyfail"] = "壁紙の設定に失敗: {0}";
             m["status.error"] = "エラー: {0}";
@@ -799,6 +803,8 @@ namespace WallpaperChanger
             m["src.empty"] = "壁紙ソースがまだありません。右上の「フォルダーを追加」から始めてください。";
             m["src.manage"] = "ソースを管理";
             m["src.manual"] = "壁紙を選択";
+            m["src.manual.badge.on"] = "有効 · {0} 枚";
+            m["src.manual.badge.off"] = "無効";
             m["rot.page.note"] = "壁紙の配置方法、切り替え頻度、選択順を決めます。";
             m["rot.keycap.capture"] = "組み合わせキーを押す…";
             m["ov.kbd.hint"] = "いつでも {0} で次の壁紙 · {1} で前の壁紙";

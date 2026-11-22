@@ -1072,6 +1072,30 @@ namespace WallpaperChanger
                 form.Test_SetPaths(paths);
                 Check(ref pass, ref fail, "scan yields every file", paths.Count == 5, paths.Count + " files");
 
+                // AppPaths must refuse Program Files / Windows even when the
+                // process could write there: an elevated launch (the
+                // installer's run step, the in-app updater) used to create an
+                // empty ini next to the exe and make the user's real settings
+                // in %LocalAppData% look lost.
+                string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                Check(ref pass, ref fail, "app dir inside Program Files is not portable",
+                    pf.Length == 0 || AppPaths.InProtectedRoot(System.IO.Path.Combine(pf, "WallpaperChanger")),
+                    AppPaths.InProtectedRoot(System.IO.Path.Combine(pf, "WallpaperChanger")).ToString());
+                string win = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                Check(ref pass, ref fail, "app dir inside the Windows folder is not portable",
+                    win.Length == 0 || AppPaths.InProtectedRoot(System.IO.Path.Combine(win, "WallpaperChanger")),
+                    AppPaths.InProtectedRoot(System.IO.Path.Combine(win, "WallpaperChanger")).ToString());
+                string sibling = "";
+                string pRoot = System.IO.Path.GetDirectoryName(pf);
+                if (!string.IsNullOrEmpty(pRoot))
+                    sibling = System.IO.Path.Combine(pRoot, "Program FilesExtra", "WallpaperChanger");
+                Check(ref pass, ref fail, "a folder sharing the name prefix stays portable",
+                    sibling.Length == 0 || !AppPaths.InProtectedRoot(sibling),
+                    sibling.Length == 0 ? "<no drive root>" : AppPaths.InProtectedRoot(sibling).ToString());
+                Check(ref pass, ref fail, "a folder on another drive stays portable",
+                    !AppPaths.InProtectedRoot(@"D:\portable\WallpaperChanger"),
+                    AppPaths.InProtectedRoot(@"D:\portable\WallpaperChanger").ToString());
+
                 // ---- file name, natural order
                 form.Test_SetSort(0);
                 form.Test_Sort();
@@ -1224,6 +1248,43 @@ namespace WallpaperChanger
                     midScan.Dispose();
                 }
                 Config.PickerSort = 0;
+                Config.Save();
+                // Regression for the reported bug: 彻底关闭手动选择壁纸 did
+                // nothing when every stored check came from a folder that is no
+                // longer a source. Save() keeps such invisible checks on purpose
+                // (a disabled source must not lose its selection), so clearing
+                // the grid and saving put every one of them straight back. The
+                // ghosts here stand in for that state: they exist on disk, the
+                // scan cannot see them, so the grid can never re-check them.
+                string ghostDir = System.IO.Path.Combine(dir, "ghost-src");
+                System.IO.Directory.CreateDirectory(ghostDir);
+                Config.ManualPicked = new List<string>();
+                Config.ManualPicked.Add(System.IO.Path.Combine(ghostDir, "gone-1.jpg"));
+                Config.ManualPicked.Add(System.IO.Path.Combine(ghostDir, "gone-2.jpg"));
+                Config.Save();
+
+                ManualPickerForm turnOff = new ManualPickerForm(null);
+                turnOff.Test_SetPaths(paths);
+                turnOff.Test_ApplySavedPicks();      // the grid shows nothing checked
+                turnOff.Test_Save();                 // ordinary save keeps them (by design)
+                Check(ref pass, ref fail, "plain save keeps checks the scan cannot see",
+                    Config.ManualPicked.Count == 2, "left " + Config.ManualPicked.Count);
+                turnOff.ClearAndSaveForTest();       // what 彻底关闭 runs
+                Check(ref pass, ref fail, "turn-off drops checks the scan cannot see",
+                    Config.ManualPicked.Count == 0, "left " + Config.ManualPicked.Count);
+                turnOff.Dispose();
+                string offIni = System.IO.Path.Combine(AppPaths.DataDir, "WallpaperChanger.ini");
+                bool iniHasPicked = false;
+                if (System.IO.File.Exists(offIni))
+                {
+                    foreach (string ln in System.IO.File.ReadAllText(offIni).Split('\n'))
+                    {
+                        if (ln.StartsWith("picked=")) iniHasPicked = true;
+                    }
+                }
+                Check(ref pass, ref fail, "turn-off removes picked= lines from the ini",
+                    !iniHasPicked, iniHasPicked ? "ini still lists picked=" : "ok");
+                Config.ManualPicked = new List<string>();
                 Config.Save();
                 // Only now, with every Config.Save() in this switch finished, let
                 // the real directory back in.
@@ -1523,6 +1584,10 @@ namespace WallpaperChanger
                     string[] codes = { Loc.Zh, Loc.En, Loc.Ja };
                     string prevHeader = null;
 
+                    // The badge beside 手动挑选壁纸 has to read "on · N" while the
+                    // checked set is non-empty, and follow the language with it.
+                    form.Test_SetManualPicked(2);
+
                     for (int step = 0; step < codes.Length; step++)
                     {
                         string code = codes[step];
@@ -1580,7 +1645,18 @@ namespace WallpaperChanger
                         }
                         CheckLang(ref pass, ref fail, code + ": every card caption follows",
                             bad == 0, bad + " wrong, last: " + badWhat);
+
+                        string wantBadge = Loc.F("src.manual.badge.on", 2);
+                        CheckLang(ref pass, ref fail, code + ": the manual badge follows",
+                            form.Test_ManualBadgeText == wantBadge,
+                            "[" + form.Test_ManualBadgeText + "] want [" + wantBadge + "]");
                     }
+
+                    // The off state, in whichever language the loop ended on.
+                    form.Test_SetManualPicked(0);
+                    CheckLang(ref pass, ref fail, "the manual badge reads off when empty",
+                        form.Test_ManualBadgeText == Loc.T("src.manual.badge.off"),
+                        "[" + form.Test_ManualBadgeText + "]");
                 }
                 finally
                 {

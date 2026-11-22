@@ -851,6 +851,13 @@ namespace WallpaperChanger
             }
         }
 
+        // The ordinary save button, exposed so /pickertest can pin down the
+        // "keep checks this scan cannot see" rule that 彻底关闭 must not follow.
+        internal void Test_Save()
+        {
+            Save();
+        }
+
         private bool NeedsMeta()
         {
             return sortMode == SortMode.Newest || sortMode == SortMode.Oldest
@@ -980,14 +987,25 @@ namespace WallpaperChanger
 
         // The state change behind 彻底关闭手动选择壁纸, split out so tests can
         // exercise it without a modal confirmation box.
-        private void ClearAndSaveForTest() { ClearAndSave(); }
+        internal void ClearAndSaveForTest() { ClearAndSave(); }
 
         private void ClearAndSave()
         {
             picked.Clear();
             if (canvas != null) canvas.ClearSelection();
-            Save();                 // Config.ManualPicked = empty + write to disk
+            // Deliberately NOT Save(): Save() keeps every stored check this
+            // scan could not see (a disabled source, an unplugged drive), which
+            // is right for the ordinary save button but wrong here - those
+            // invisible checks are exactly what makes manual mode look "on but
+            // nothing to rotate". They also cannot be re-checked in the grid
+            // because the scan does not list them, so a save that keeps them
+            // makes this button a no-op. Turning manual selection off means
+            // every stored check goes away.
+            Config.ManualPicked = new List<string>();
+            Config.Save();
+            dirty = false;
             savedMessage = Loc.T("picker.saved.off");
+            UpdateHint();
         }
 
         // Ask once per close attempt whether unsaved picks should be saved.

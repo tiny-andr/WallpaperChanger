@@ -2,7 +2,7 @@
 ; Build:  "C:\Users\Administrator\InnoSetup6\ISCC.exe" WallpaperChanger.iss
 
 #define MyAppName "WallpaperChanger"
-#define MyAppVersion "2.1.0"
+#define MyAppVersion "2.1.1"
 #define MyAppExe "WallpaperChanger.exe"
 
 [Setup]
@@ -46,7 +46,11 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExe}"; Tasks: deskto
 ; No skipifsilent: the in-app updater starts this installer with /VERYSILENT
 ; and then exits, so the app has to come back by itself afterwards. An
 ; interactive install still starts it from the finished page (postinstall).
-Filename: "{app}\{#MyAppExe}"; Description: "启动 {#MyAppName}"; Tasks: runnow; Flags: nowait postinstall
+; runasoriginaluser: the installer is elevated, but the app must come back
+; with the user's normal token - otherwise it starts as admin, and before
+; 2.1.1 that meant it read/created a config next to the exe in Program Files
+; instead of the real one in %LocalAppData%.
+Filename: "{app}\{#MyAppExe}"; Description: "启动 {#MyAppName}"; Tasks: runnow; Flags: nowait postinstall runasoriginaluser
 
 
 

@@ -39,6 +39,9 @@ namespace WallpaperChanger
         private KitLabel lblSrcListNote;
         private FlatButton btnAddFolder;
         private FlatButton btnManualPick;
+        // "On · 368 wallpapers" / "Off" next to the button: manual mode has no
+        // switch of its own, so this is the only place that states it.
+        private KitLabel lblManualBadge;
         private FlatButton btnAllOn;
         private FlatButton btnAllOff;
         private FlatButton btnRecount;
@@ -692,6 +695,11 @@ namespace WallpaperChanger
             btnManualPick.Kind = BtnKind.Secondary;
             btnManualPick.Icon = IconKind.Grid;
             btnManualPick.Click += delegate { OpenManualPicker(); };
+
+            // Manual mode is on exactly when at least one wallpaper is checked,
+            // so the state has to be readable without opening the picker.
+            lblManualBadge = acts.AddChild(Txt(LabelStyle.Body, false), 222, 62, 440, Theme.BtnH);
+            RefreshManualBadge();
         }
 
         // ---- general -------------------------------------------------------
@@ -1265,6 +1273,7 @@ namespace WallpaperChanger
             // ---- sources
             btnAddFolder.Text = Loc.T("src.add.folder");
             btnManualPick.Text = Loc.T("src.manual");
+            RefreshManualBadge();
             btnAllOn.Text = Loc.T("src.allon");
             btnAllOff.Text = Loc.T("src.alloff");
             btnRecount.Text = Loc.T("src.refresh");
@@ -1427,6 +1436,9 @@ namespace WallpaperChanger
         private void ApplyTheme()
         {
             Theme.ApplyTo(this);
+            // The badge's ink comes from the palette, so it has to be re-picked
+            // after ApplyTo rather than just repainted.
+            RefreshManualBadge();
             Theme.ApplyMenuStrip(trayMenu);
             Theme.SetTitleBar(this);
             // The frame line follows the palette, so a theme switch repaints it
@@ -2150,6 +2162,7 @@ namespace WallpaperChanger
             }
             bool nowOn = Config.ManualPicked.Count > 0;
             RefreshStatusLine();
+            RefreshManualBadge();
             if (wasOn != nowOn)
             {
                 RefreshStatusLine();
@@ -2968,6 +2981,21 @@ namespace WallpaperChanger
             RenderStatus();
         }
 
+        // The badge beside 手动挑选壁纸. Manual mode has no switch of its own -
+        // it is on exactly when at least one wallpaper is checked - so this is
+        // the only place on the page that states the current state. Accent ink
+        // when on, muted when off; re-run on language and theme changes.
+        private void RefreshManualBadge()
+        {
+            if (lblManualBadge == null) return;
+            int n = Config.ManualPicked.Count;
+            lblManualBadge.Text = n > 0
+                ? Loc.F("src.manual.badge.on", n)
+                : Loc.T("src.manual.badge.off");
+            lblManualBadge.Ink = n > 0 ? Theme.Ok : Theme.MutedStrong;
+            lblManualBadge.Invalidate();
+        }
+
         // The focused key cap swallows this: Ctrl+9 has to be bindable
         // without also switching the wallpaper while it is being bound.
         private bool SuppressHotkeys
@@ -3525,6 +3553,21 @@ namespace WallpaperChanger
         internal void Test_SwitchLanguage(string lang)
         {
             ChangeLanguage(lang);
+        }
+
+        // /langtest: the manual-mode badge beside 手动挑选壁纸. It has to follow
+        // both the checked set and the language, and a screenshot can only ever
+        // show one of those four combinations.
+        internal string Test_ManualBadgeText
+        {
+            get { return lblManualBadge == null ? "<no badge>" : lblManualBadge.Text; }
+        }
+
+        internal void Test_SetManualPicked(int n)
+        {
+            Config.ManualPicked = new List<string>();
+            for (int i = 0; i < n; i++) Config.ManualPicked.Add("C:\\badge-test\\" + i + ".jpg");
+            RefreshManualBadge();
         }
 
         // /ordertest: which wallpaper this session resumed from. It is filled

@@ -38,19 +38,29 @@ namespace WallpaperChanger
         private static void Init()
         {
             string dir = AppDomain.CurrentDomain.BaseDirectory;
-            try
+            // A protected install location never hosts the config, even when
+            // this process happens to be elevated and could write there. The
+            // installer's "start the app" step and the in-app updater both
+            // launch the exe with an admin token, so a plain writability
+            // probe says yes, the app then reads an empty ini next to the exe,
+            // and the user's real settings in %LocalAppData% look lost. Same
+            // rule for both tokens = one config no matter how it was started.
+            if (!InProtectedRoot(dir))
             {
-                string probe = Path.Combine(dir, ".wc_write_test");
-                using (FileStream fs = new FileStream(probe, FileMode.Create, FileAccess.Write,
-                    FileShare.None, 1, FileOptions.DeleteOnClose))
+                try
                 {
+                    string probe = Path.Combine(dir, ".wc_write_test");
+                    using (FileStream fs = new FileStream(probe, FileMode.Create, FileAccess.Write,
+                        FileShare.None, 1, FileOptions.DeleteOnClose))
+                    {
+                    }
+                    dataDir = dir;
+                    return;
                 }
-                dataDir = dir;
-                return;
-            }
-            catch
-            {
-                // exe dir not writable
+                catch
+                {
+                    // exe dir not writable
+                }
             }
 
             string alt = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -64,6 +74,34 @@ namespace WallpaperChanger
             {
                 dataDir = dir;
             }
+        }
+
+        // True when the directory is (or sits under) Program Files,
+        // Program Files (x86) or the Windows folder. internal so /pickertest
+        // can pin the boundaries down (a sibling folder like "Program
+        // FilesExtra" must stay portable).
+        internal static bool InProtectedRoot(string dir)
+        {
+            string full;
+            try { full = Path.GetFullPath(dir).TrimEnd('\\'); }
+            catch { return false; }
+
+            Environment.SpecialFolder[] roots = new Environment.SpecialFolder[]
+            {
+                Environment.SpecialFolder.ProgramFiles,
+                Environment.SpecialFolder.ProgramFilesX86,
+                Environment.SpecialFolder.Windows
+            };
+            foreach (Environment.SpecialFolder kind in roots)
+            {
+                string root = Environment.GetFolderPath(kind);
+                if (string.IsNullOrEmpty(root)) continue;
+                try { root = Path.GetFullPath(root).TrimEnd('\\'); }
+                catch { continue; }
+                if (full.Equals(root, StringComparison.OrdinalIgnoreCase)) return true;
+                if (full.StartsWith(root + "\\", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
         }
     }
 
