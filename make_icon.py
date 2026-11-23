@@ -1,6 +1,7 @@
 # Generate WallpaperChanger.ico (multi-size PNG-based ICO)
 # Theme: dark blue-purple gradient, white rounded picture frame,
 #        orange sun and layered mountains inside - a "wallpaper" glyph.
+import os
 from PIL import Image, ImageDraw
 
 def make(size):
@@ -61,7 +62,8 @@ def make(size):
 sizes = [16, 24, 32, 48, 64, 128, 256]
 images = [make(s) for s in sizes]
 # main image must be the largest; append the rest
-images[-1].save(r"E:\workbuddy\windows系统优化\WallpaperChanger\icon.ico",
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icon.ico")
+images[-1].save(out,
                 format="ICO", sizes=[(s, s) for s in sizes],
                 append_images=images[:-1])
 print("icon.ico written, sizes:", sizes)
