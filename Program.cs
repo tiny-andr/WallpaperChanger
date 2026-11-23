@@ -1092,9 +1092,11 @@ namespace WallpaperChanger
                 Check(ref pass, ref fail, "a folder sharing the name prefix stays portable",
                     sibling.Length == 0 || !AppPaths.InProtectedRoot(sibling),
                     sibling.Length == 0 ? "<no drive root>" : AppPaths.InProtectedRoot(sibling).ToString());
-                Check(ref pass, ref fail, "a folder on another drive stays portable",
-                    !AppPaths.InProtectedRoot(@"D:\portable\WallpaperChanger"),
-                    AppPaths.InProtectedRoot(@"D:\portable\WallpaperChanger").ToString());
+                string systemRoot = System.IO.Path.GetPathRoot(Environment.SystemDirectory);
+                string outsideInstall = System.IO.Path.Combine(systemRoot, "portable", "WallpaperChanger");
+                Check(ref pass, ref fail, "a folder outside Program Files and Windows stays portable",
+                    !AppPaths.InProtectedRoot(outsideInstall),
+                    AppPaths.InProtectedRoot(outsideInstall).ToString());
 
                 // ---- file name, natural order
                 form.Test_SetSort(0);

@@ -3566,7 +3566,7 @@ namespace WallpaperChanger
         internal void Test_SetManualPicked(int n)
         {
             Config.ManualPicked = new List<string>();
-            for (int i = 0; i < n; i++) Config.ManualPicked.Add("C:\\badge-test\\" + i + ".jpg");
+            for (int i = 0; i < n; i++) Config.ManualPicked.Add("badge-test/" + i + ".jpg");
             RefreshManualBadge();
         }
 
